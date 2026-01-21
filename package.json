@@ -1,0 +1,23 @@
+{
+  "name": "searchtok-telegram-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for tracking TikTok Solana memecoins",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "node bot.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "solana",
+    "memecoin",
+    "tiktok"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "dotenv": "^16.4.5"
+  }
+}
