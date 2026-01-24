@@ -100,9 +100,17 @@ function isAdmin(userId) {
 // Fetch token data from DexScreener API
 async function fetchTokenData(contractAddress) {
   try {
-    const response = await axios.get(
+    // Try direct token lookup first
+    let response = await axios.get(
       `https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`
     );
+
+    // If no pairs found, try search endpoint (better for new pump.fun tokens)
+    if (!response.data || !response.data.pairs || response.data.pairs.length === 0) {
+      response = await axios.get(
+        `https://api.dexscreener.com/latest/dex/search?q=${contractAddress}`
+      );
+    }
 
     if (!response.data || !response.data.pairs || response.data.pairs.length === 0) {
       return null;
