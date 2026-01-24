@@ -73,9 +73,16 @@ function parseCoinFromMessage(text) {
         if (match) age = match[1].trim();
       }
 
-      // Extract contract address
-      if (line.trim().length >= 32 && line.trim().length <= 44 && !line.includes(':') && !line.includes('http')) {
-        contract = line.trim();
+      // Extract contract address (look for lines that are just contract addresses)
+      const trimmed = line.trim();
+      // Match contract address in backticks or plain
+      if (trimmed.startsWith('`') && trimmed.endsWith('`')) {
+        const addr = trimmed.slice(1, -1);
+        if (addr.length >= 32 && addr.length <= 44) {
+          contract = addr;
+        }
+      } else if (trimmed.length >= 32 && trimmed.length <= 44 && !line.includes(':') && !line.includes('http') && !line.includes('//')) {
+        contract = trimmed;
       }
 
       // Extract posted time
@@ -85,16 +92,17 @@ function parseCoinFromMessage(text) {
       }
     }
 
-    if (symbol && contract && marketCap) {
+    // Return coin data if we have at least a contract address
+    if (contract) {
       return {
-        symbol,
-        name: name || symbol,
+        symbol: symbol || 'UNKNOWN',
+        name: name || 'Unknown Token',
         contract,
-        price,
-        marketCap,
-        marketCapRaw: parseMarketCap(marketCap),
-        age,
-        ageRaw: parseAge(age),
+        price: price || 'N/A',
+        marketCap: marketCap || 'N/A',
+        marketCapRaw: marketCap ? parseMarketCap(marketCap) : 0,
+        age: age || 'Unknown',
+        ageRaw: age ? parseAge(age) : 0,
         postedAt: postedAt || new Date().toISOString(),
         addedToDbAt: new Date().toISOString()
       };

@@ -267,10 +267,10 @@ bot.onText(/\/help/, (msg) => {
   if (isAdmin(userId)) {
     helpMessage += `
 👑 ADMIN COMMANDS:
-/post <contract_address> - Auto-fetch and post (may be blocked by API)
+/post <contract_address> - Post memecoin to subscribers and channel
   Example: /post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump
 
-/postman SYMBOL|NAME|CONTRACT|MCAP|PRICE|AGE|IMAGE - Manual post
+/postman SYMBOL|NAME|CONTRACT|MCAP|PRICE|AGE|IMAGE - Post with full details
   Example: /postman BONK|Bonk Coin|7Bg...pump|$1.2M|$0.00001|2 days|https://img.jpg
   Minimum: SYMBOL|NAME|CONTRACT|MCAP
 
@@ -466,67 +466,18 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
     return;
   }
 
-  // Show loading message
-  const loadingMsg = await bot.sendMessage(chatId, '⏳ Fetching token data from DexScreener...');
-
   try {
-    // Fetch token data
-    const tokenData = await fetchTokenData(contractAddress);
-
-    if (!tokenData) {
-      bot.deleteMessage(chatId, loadingMsg.message_id);
-      bot.sendMessage(
-        chatId,
-        `❌ Could not find token data for this contract address.\n\nMake sure:\n• The address is correct\n• The token is listed on DexScreener\n• The token has active trading pairs`
-      );
-      return;
-    }
-
-    // Delete loading message
-    bot.deleteMessage(chatId, loadingMsg.message_id);
-
     const subscribers = await getSubscribers();
 
-    if (subscribers.length === 0) {
-      bot.sendMessage(chatId, '⚠️ No subscribers yet! Posting to channel only (if configured).');
-    }
-
-    // Build socials section
-    let socialsText = '';
-    if (tokenData.socials && tokenData.socials.length > 0) {
-      socialsText += '\n🔗 Socials:\n';
-      tokenData.socials.forEach(social => {
-        const icon = social.type === 'twitter' ? '🐦' :
-                     social.type === 'telegram' ? '💬' :
-                     social.type === 'discord' ? '💭' : '🔗';
-        socialsText += `${icon} ${social.type.charAt(0).toUpperCase() + social.type.slice(1)}: ${social.url}\n`;
-      });
-    }
-
-    if (tokenData.websites && tokenData.websites.length > 0) {
-      socialsText += tokenData.websites.map(site => `🌐 Website: ${site.url}`).join('\n') + '\n';
-    }
-
-    // Create the message
+    // Create simple message with contract address
     const message = `
 🚀 NEW TIKTOK MEMECOIN ALERT! 🚀
 
-💎 ${tokenData.symbol} | ${tokenData.name}
+📝 CONTRACT ADDRESS:
+\`${contractAddress}\`
 
-📊 MARKET DATA:
-💵 Price: ${tokenData.price}
-📈 Market Cap: ${tokenData.marketCap}
-💧 Liquidity: ${tokenData.liquidity}
-📊 24h Volume: ${tokenData.volume24h}
-📉 24h Change: ${tokenData.priceChange24h}
-
-⏰ AGE:
-🕐 ${tokenData.age} (Created: ${tokenData.createdAt})
-
-📝 CONTRACT:
-\`${tokenData.contractAddress}\`
-${socialsText}
-🔍 DexScreener: ${tokenData.dexScreenerUrl}
+🔍 View on DexScreener:
+https://dexscreener.com/solana/${contractAddress}
 
 ⏰ Posted: ${new Date().toLocaleString()}
     `;
@@ -537,11 +488,7 @@ ${socialsText}
 
     for (const subscriber of subscribers) {
       try {
-        if (tokenData.imageUrl) {
-          await bot.sendPhoto(subscriber.userId, tokenData.imageUrl, { caption: message });
-        } else {
-          await bot.sendMessage(subscriber.userId, message);
-        }
+        await bot.sendMessage(subscriber.userId, message);
         successCount++;
       } catch (error) {
         console.error(`Failed to send to user ${subscriber.userId}:`, error.message);
@@ -552,22 +499,17 @@ ${socialsText}
     // Send to channel if configured
     if (channelId) {
       try {
-        if (tokenData.imageUrl) {
-          await bot.sendPhoto(channelId, tokenData.imageUrl, { caption: message });
-        } else {
-          await bot.sendMessage(channelId, message);
-        }
+        await bot.sendMessage(channelId, message);
         bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers and channel!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.` : ''}`);
       } catch (error) {
         console.error('Failed to send to channel:', error.message);
-        bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.\n` : ''}❌ Failed to post to channel.`);
+        bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.\n` : ''}❌ Failed to post to channel: ${error.message}`);
       }
     } else {
       bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.` : ''}`);
     }
   } catch (error) {
     console.error('Error posting memecoin:', error);
-    bot.deleteMessage(chatId, loadingMsg.message_id);
     bot.sendMessage(chatId, '❌ An error occurred while posting the memecoin.');
   }
 });
