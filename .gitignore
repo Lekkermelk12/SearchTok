@@ -1,5 +1,6 @@
 node_modules/
 .env
 memecoins.json
+channel-coins.json
 *.log
 .DS_Store

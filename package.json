@@ -5,7 +5,10 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "dev": "node bot.js"
+    "dev": "node bot.js",
+    "start:admin": "node admin-bot.js",
+    "start:public": "node public-bot.js",
+    "start:both": "concurrently \"npm run start:admin\" \"npm run start:public\""
   },
   "keywords": [
     "telegram",
