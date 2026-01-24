@@ -15,6 +15,59 @@ if (!token) {
 const bot = new TelegramBot(token, { polling: true });
 const COINS_FILE = path.join(__dirname, 'channel-coins.json');
 
+// Fetch token metadata from Solscan
+async function fetchTokenMetadata(contractAddress) {
+  try {
+    const response = await axios.get(
+      `https://pro-api.solscan.io/v1.0/token/meta?tokenAddress=${contractAddress}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+
+    if (response.data) {
+      return {
+        symbol: response.data.symbol || null,
+        name: response.data.name || null,
+        decimals: response.data.decimals || null,
+        icon: response.data.icon || null
+      };
+    }
+  } catch (error) {
+    console.log('Solscan API failed, trying alternative method...');
+    // Try DexScreener as fallback
+    try {
+      const dexResponse = await axios.get(
+        `https://api.dexscreener.com/latest/dex/search?q=${contractAddress}`,
+        {
+          headers: {
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': 'application/json'
+          },
+          timeout: 10000
+        }
+      );
+
+      if (dexResponse.data?.pairs?.[0]) {
+        const pair = dexResponse.data.pairs[0];
+        return {
+          symbol: pair.baseToken?.symbol || null,
+          name: pair.baseToken?.name || null,
+          icon: pair.info?.imageUrl || null
+        };
+      }
+    } catch (dexError) {
+      console.log('DexScreener fallback also failed');
+    }
+  }
+
+  return null;
+}
+
 // Load coins data from file
 async function loadCoins() {
   try {
@@ -168,6 +221,17 @@ bot.on('channel_post', async (msg) => {
       // Check if coin already exists
       const exists = coins.find(c => c.contract === coin.contract);
       if (!exists) {
+        // If symbol/name are unknown, try to fetch from Solscan
+        if (coin.symbol === 'UNKNOWN' || !coin.symbol) {
+          console.log(`Fetching metadata for ${coin.contract}...`);
+          const metadata = await fetchTokenMetadata(coin.contract);
+          if (metadata && metadata.symbol) {
+            coin.symbol = metadata.symbol;
+            coin.name = metadata.name || metadata.symbol;
+            console.log(`Found token: ${coin.symbol} - ${coin.name}`);
+          }
+        }
+
         coins.push(coin);
         await saveCoins(coins);
         console.log(`Added ${coin.symbol} to database`);
