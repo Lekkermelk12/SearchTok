@@ -267,12 +267,11 @@ bot.onText(/\/help/, (msg) => {
   if (isAdmin(userId)) {
     helpMessage += `
 👑 ADMIN COMMANDS:
-/post <contract_address> - Post memecoin to subscribers and channel
-  Example: /post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump
+/post CONTRACT|MCAP|AGE|IMAGE_URL - Post memecoin with image
+  Example: /post 8Jx...pump|$22K|11 days old|https://...jpg
 
-/postman SYMBOL|NAME|CONTRACT|MCAP|PRICE|AGE|IMAGE - Post with full details
+/postman SYMBOL|NAME|CONTRACT|MCAP|PRICE|AGE|IMAGE - Post with all details
   Example: /postman BONK|Bonk Coin|7Bg...pump|$1.2M|$0.00001|2 days|https://img.jpg
-  Minimum: SYMBOL|NAME|CONTRACT|MCAP
 
 /subscribers - View subscriber count
     `;
@@ -441,7 +440,7 @@ bot.onText(/\/remove (.+)/, async (msg, match) => {
   }
 });
 
-// /post command (admin only) - Simplified: just provide contract address
+// /post command (admin only) - Post with image, market cap, age, and CA
 bot.onText(/\/post (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id.toString();
@@ -455,31 +454,47 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
     return;
   }
 
-  const contractAddress = match[1].trim();
+  const input = match[1].trim();
+  const parts = input.split('|').map(p => p.trim());
 
-  // Basic validation for Solana contract address (usually 32-44 characters)
-  if (contractAddress.length < 32 || contractAddress.length > 44) {
+  // Check if we have all required parts
+  if (parts.length < 4) {
     bot.sendMessage(
       chatId,
-      `❌ Invalid contract address format!\n\nUsage:\n/post <contract_address>\n\nExample:\n/post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump`
+      `❌ Invalid format! Use:
+/post CONTRACT|MCAP|AGE|IMAGE_URL
+
+Example:
+/post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump|$22K|11 days old|https://cdn.dexscreener.com/...jpg
+
+Required:
+• Contract Address
+• Market Cap
+• Age
+• Image URL`
     );
     return;
   }
 
+  const contractAddress = parts[0];
+  const marketCap = parts[1];
+  const age = parts[2];
+  const imageUrl = parts[3];
+
   try {
     const subscribers = await getSubscribers();
 
-    // Create simple message with contract address
+    // Create message with market cap, age, and CA
     const message = `
 🚀 NEW TIKTOK MEMECOIN ALERT! 🚀
 
-📝 CONTRACT ADDRESS:
+📈 Market Cap: ${marketCap}
+🕐 Age: ${age}
+
+📝 CONTRACT:
 \`${contractAddress}\`
 
-🔍 View on DexScreener:
-https://dexscreener.com/solana/${contractAddress}
-
-⏰ Posted: ${new Date().toLocaleString()}
+🔍 DexScreener: https://dexscreener.com/solana/${contractAddress}
     `;
 
     // Send to all subscribers
@@ -488,7 +503,7 @@ https://dexscreener.com/solana/${contractAddress}
 
     for (const subscriber of subscribers) {
       try {
-        await bot.sendMessage(subscriber.userId, message);
+        await bot.sendPhoto(subscriber.userId, imageUrl, { caption: message });
         successCount++;
       } catch (error) {
         console.error(`Failed to send to user ${subscriber.userId}:`, error.message);
@@ -499,7 +514,7 @@ https://dexscreener.com/solana/${contractAddress}
     // Send to channel if configured
     if (channelId) {
       try {
-        await bot.sendMessage(channelId, message);
+        await bot.sendPhoto(channelId, imageUrl, { caption: message });
         bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers and channel!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.` : ''}`);
       } catch (error) {
         console.error('Failed to send to channel:', error.message);

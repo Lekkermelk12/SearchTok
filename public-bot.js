@@ -55,9 +55,9 @@ function parseCoinFromMessage(text) {
         }
       }
 
-      // Extract market cap
+      // Extract market cap (format: "📈 Market Cap: $22K" or "Market Cap: $22K")
       if (line.includes('Market Cap:')) {
-        const match = line.match(/Market Cap:\s+(.+)/);
+        const match = line.match(/Market Cap:\s*(.+)/);
         if (match) marketCap = match[1].trim();
       }
 
@@ -67,8 +67,11 @@ function parseCoinFromMessage(text) {
         if (match) price = match[1].trim();
       }
 
-      // Extract age
-      if (line.match(/🕐\s+(.+)\s+\(Created:/)) {
+      // Extract age (format: "🕐 Age: 11 days old" or "🕐 11 days old (Created:...")
+      if (line.includes('Age:')) {
+        const match = line.match(/Age:\s*(.+)/);
+        if (match) age = match[1].trim();
+      } else if (line.match(/🕐\s+(.+)\s+\(Created:/)) {
         const match = line.match(/🕐\s+(.+?)\s+\(/);
         if (match) age = match[1].trim();
       }
