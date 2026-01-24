@@ -45,107 +45,83 @@ async function saveUserMemecoins(userId, memecoins) {
   await saveMemecoins(allData);
 }
 
-// Common headers for API requests
-const commonHeaders = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'application/json',
-  'Accept-Language': 'en-US,en;q=0.9'
-};
-
-// Fetch token data from gmgn.ai
-async function fetchGmgnData(contractAddress) {
+// Fetch token data from Solscan v2 API
+async function fetchSolscanV2Data(contractAddress) {
   try {
-    // Try the common gmgn.ai API endpoint pattern
-    const response = await axios.get(`https://gmgn.ai/defi/quotation/v1/tokens/sol/${contractAddress}`, {
-      timeout: 10000,
-      headers: {
-        ...commonHeaders,
-        'Host': 'gmgn.ai',
-        'Referer': 'https://gmgn.ai/'
-      }
-    });
-    return response.data;
-  } catch (error) {
-    console.log('GMGN fetch failed:', error.message);
-    return null;
-  }
-}
-
-// Fetch token data from Birdeye API
-async function fetchBirdeyeData(contractAddress) {
-  try {
-    const response = await axios.get(`https://public-api.birdeye.so/defi/token_overview`, {
+    const response = await axios.get(`https://pro-api.solscan.io/v2.0/token/meta`, {
       params: { address: contractAddress },
-      headers: {
-        ...commonHeaders,
-        'X-API-KEY': 'public',
-        'Host': 'public-api.birdeye.so'
-      },
-      timeout: 10000
+      timeout: 15000
     });
-    return response.data;
+
+    if (response.data && response.data.success && response.data.data) {
+      return response.data.data;
+    }
+    return null;
   } catch (error) {
-    console.log('Birdeye fetch failed:', error.message);
+    console.log('Solscan v2 fetch failed:', error.message);
     return null;
   }
 }
 
-// Fetch token data from Solscan
-async function fetchSolscanData(contractAddress) {
-  try {
-    const response = await axios.get(`https://api.solscan.io/token/meta`, {
-      params: { token: contractAddress },
-      headers: {
-        ...commonHeaders,
-        'Host': 'api.solscan.io'
-      },
-      timeout: 10000
-    });
-    return response.data;
-  } catch (error) {
-    console.log('Solscan fetch failed:', error.message);
-    return null;
+// Calculate token age from created_time
+function calculateTokenAge(createdTime) {
+  if (!createdTime) return null;
+
+  const createdDate = new Date(createdTime * 1000); // Unix timestamp to milliseconds
+  const now = new Date();
+  const ageMs = now - createdDate;
+
+  const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+  const ageHours = Math.floor((ageMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const ageMinutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
+
+  if (ageDays > 0) {
+    return `${ageDays}d ${ageHours}h`;
+  } else if (ageHours > 0) {
+    return `${ageHours}h ${ageMinutes}m`;
+  } else {
+    return `${ageMinutes}m`;
   }
 }
 
-// Fetch token data from DexScreener
-async function fetchDexScreenerData(contractAddress) {
-  try {
-    const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`, {
-      headers: {
-        ...commonHeaders,
-        'Host': 'api.dexscreener.com',
-        'Referer': 'https://dexscreener.com/'
-      },
-      timeout: 10000
-    });
-    return response.data;
-  } catch (error) {
-    console.log('DexScreener fetch failed:', error.message);
-    return null;
+// Format token data for posting
+function formatTokenData(data, contractAddress) {
+  if (!data) return null;
+
+  const name = data.name || 'Unknown';
+  const symbol = data.symbol || 'Unknown';
+  const marketCap = data.market_cap;
+  const holders = data.holder;
+  const age = calculateTokenAge(data.created_time);
+  const price = data.price;
+
+  let message = `🪙 *${name}* ($${symbol})\n\n`;
+
+  if (price) {
+    message += `💰 *Price:* $${parseFloat(price).toFixed(8)}\n`;
   }
-}
 
-// Get comprehensive token data
-async function getTokenData(contractAddress) {
-  const results = await Promise.allSettled([
-    fetchGmgnData(contractAddress),
-    fetchBirdeyeData(contractAddress),
-    fetchSolscanData(contractAddress),
-    fetchDexScreenerData(contractAddress)
-  ]);
+  if (marketCap) {
+    const mcFormatted = marketCap >= 1000000
+      ? `$${(marketCap / 1000000).toFixed(2)}M`
+      : marketCap >= 1000
+      ? `$${(marketCap / 1000).toFixed(2)}K`
+      : `$${marketCap.toFixed(2)}`;
+    message += `📊 *Market Cap:* ${mcFormatted}\n`;
+  }
 
-  const gmgnData = results[0].status === 'fulfilled' ? results[0].value : null;
-  const birdeyeData = results[1].status === 'fulfilled' ? results[1].value : null;
-  const solscanData = results[2].status === 'fulfilled' ? results[2].value : null;
-  const dexScreenerData = results[3].status === 'fulfilled' ? results[3].value : null;
+  if (holders) {
+    message += `👥 *Holders:* ${holders.toLocaleString()}\n`;
+  }
 
-  return {
-    gmgn: gmgnData,
-    birdeye: birdeyeData,
-    solscan: solscanData,
-    dexScreener: dexScreenerData
-  };
+  if (age) {
+    message += `⏰ *Age:* ${age}\n`;
+  }
+
+  message += `\n📝 *CA:* \`${contractAddress}\`\n`;
+  message += `\n🔗 [Solscan](https://solscan.io/token/${contractAddress}) • [DexScreener](https://dexscreener.com/solana/${contractAddress})`;
+
+  return message;
 }
 
 // /start command
@@ -156,16 +132,15 @@ bot.onText(/\/start/, (msg) => {
 
 Track your favorite TikTok Solana memecoins with these commands:
 
-/add <symbol> <contract_address> - Add a memecoin
-  Example: /add BONK 7BgBvyjrZX1YKz4oh9mjb8ZScatkkwb8DzFx4e7PCRMV
-
-/list - Show all your tracked memecoins
-
-/remove <symbol> - Remove a memecoin
-  Example: /remove BONK
-
-/post <contract_address> - Get detailed token info
+/post <CA> - Get token data (MC, holders, age, name, ticker)
   Example: /post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump
+
+/bulkpost - Process multiple tokens at once
+  (Then send CAs, one per line)
+
+/add <symbol> <CA> - Add a memecoin to your tracker
+/list - Show your tracked memecoins
+/remove <symbol> - Remove from tracker
 
 /help - Show this message
   `;
@@ -176,22 +151,31 @@ Track your favorite TikTok Solana memecoins with these commands:
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   const helpMessage = `
-📚 Available Commands:
+📚 *Available Commands:*
 
-/add <symbol> <contract_address> - Add a memecoin to track
-  Example: /add BONK 7BgBvyjrZX1YKz4oh9mjb8ZScatkkwb8DzFx4e7PCRMV
-
-/list - Display all your tracked memecoins
-
-/remove <symbol> - Remove a memecoin from your list
-  Example: /remove BONK
-
-/post <contract_address> - Get detailed token information with price, market cap, socials, and image
+*Token Data (Solscan):*
+/post <CA> - Get token info
+  • Market Cap
+  • Holder Count
+  • Token Age
+  • Name & Ticker
+  • Price
   Example: /post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump
 
-/help - Show this help message
+*Bulk Processing:*
+/bulkpost - Process multiple tokens
+  1. Send /bulkpost
+  2. Paste contract addresses (one per line)
+  3. Get data for all tokens
+
+*Tracker Commands:*
+/add <symbol> <CA> - Add to your tracker
+/list - Show tracked memecoins
+/remove <symbol> - Remove from tracker
+
+💡 *Tip:* Use bulk mode for posting 100 coins per day!
   `;
-  bot.sendMessage(chatId, helpMessage);
+  bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 });
 
 // /add command
@@ -302,200 +286,139 @@ bot.onText(/\/remove (.+)/, async (msg, match) => {
   }
 });
 
-// /post command - Fetch and display token data
+// /post command - Fetch and display token data from Solscan
 bot.onText(/\/post (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const contractAddress = match[1].trim();
 
   // Send initial message
-  const loadingMsg = await bot.sendMessage(chatId, '🔍 Fetching token data...');
+  const loadingMsg = await bot.sendMessage(chatId, '🔍 Fetching token data from Solscan...');
 
   try {
-    const tokenData = await getTokenData(contractAddress);
-    const { gmgn, birdeye, solscan, dexScreener } = tokenData;
+    const tokenData = await fetchSolscanV2Data(contractAddress);
 
-    // Extract data from available sources
-    let tokenName = 'Unknown';
-    let tokenSymbol = 'Unknown';
-    let tokenImage = null;
-    let marketCap = null;
-    let price = null;
-    let volume24h = null;
-    let priceChange24h = null;
-    let liquidity = null;
-    let holders = null;
-    let createdAt = null;
-    let website = null;
-    let twitter = null;
-    let telegram = null;
-
-    // Parse DexScreener data (most reliable for new tokens)
-    if (dexScreenerData && dexScreenerData.pairs && dexScreenerData.pairs.length > 0) {
-      const pair = dexScreenerData.pairs[0];
-      tokenName = pair.baseToken?.name || tokenName;
-      tokenSymbol = pair.baseToken?.symbol || tokenSymbol;
-      tokenImage = pair.info?.imageUrl || pair.baseToken?.logo || tokenImage;
-      marketCap = pair.marketCap || pair.fdv;
-      price = pair.priceUsd;
-      volume24h = pair.volume?.h24;
-      priceChange24h = pair.priceChange?.h24;
-      liquidity = pair.liquidity?.usd;
-
-      // Social links
-      if (pair.info?.websites && pair.info.websites.length > 0) {
-        website = pair.info.websites[0].url;
-      }
-      if (pair.info?.socials) {
-        const twitterLink = pair.info.socials.find(s => s.type === 'twitter');
-        const telegramLink = pair.info.socials.find(s => s.type === 'telegram');
-        twitter = twitterLink?.url;
-        telegram = telegramLink?.url;
-      }
-    }
-
-    // Parse Birdeye data
-    if (birdeyeData && birdeyeData.data) {
-      const data = birdeyeData.data;
-      tokenName = data.name || tokenName;
-      tokenSymbol = data.symbol || tokenSymbol;
-      tokenImage = data.logoURI || tokenImage;
-      marketCap = marketCap || data.mc;
-      price = price || data.price;
-      volume24h = volume24h || data.v24hUSD;
-      liquidity = liquidity || data.liquidity;
-    }
-
-    // Parse Solscan data
-    if (solscanData && solscanData.data) {
-      tokenName = solscanData.data.name || tokenName;
-      tokenSymbol = solscanData.data.symbol || tokenSymbol;
-      tokenImage = solscanData.data.icon || tokenImage;
-      holders = solscanData.data.holder;
-    }
-
-    // Parse GMGN data if available
-    if (gmgnData && gmgnData.data) {
-      const data = gmgnData.data;
-      tokenName = data.name || tokenName;
-      tokenSymbol = data.symbol || tokenSymbol;
-      tokenImage = data.logo || tokenImage;
-      marketCap = marketCap || data.market_cap;
-      price = price || data.price;
-      createdAt = data.created_at;
-
-      // GMGN has social data
-      if (data.twitter) twitter = `https://twitter.com/${data.twitter}`;
-      if (data.telegram) telegram = data.telegram;
-      if (data.website) website = data.website;
-    }
-
-    // Check if we have any data
-    if (tokenName === 'Unknown' && !price && !marketCap) {
+    if (!tokenData) {
       await bot.editMessageText(
         `❌ Could not find token data for this address.\n\n` +
-        `Tried:\n• DexScreener API\n• Birdeye API\n• Solscan API\n• GMGN.ai\n\n` +
-        `The token might be too new or not yet indexed.`,
+        `The token might be too new or not yet indexed on Solscan.\n\n` +
+        `📝 CA: \`${contractAddress}\``,
+        { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    const message = formatTokenData(tokenData, contractAddress);
+
+    if (!message) {
+      await bot.editMessageText(
+        `❌ Error formatting token data.`,
         { chat_id: chatId, message_id: loadingMsg.message_id }
       );
       return;
     }
 
-    // Format the message
-    let message = `🪙 *${tokenName}* (${tokenSymbol})\n\n`;
-
-    if (price) {
-      message += `💰 *Price:* $${parseFloat(price).toFixed(8)}\n`;
-    }
-
-    if (marketCap) {
-      const mcFormatted = marketCap >= 1000000
-        ? `$${(marketCap / 1000000).toFixed(2)}M`
-        : `$${marketCap.toLocaleString()}`;
-      message += `📊 *Market Cap:* ${mcFormatted}\n`;
-    }
-
-    if (volume24h) {
-      const volFormatted = volume24h >= 1000000
-        ? `$${(volume24h / 1000000).toFixed(2)}M`
-        : `$${volume24h.toLocaleString()}`;
-      message += `📈 *24h Volume:* ${volFormatted}\n`;
-    }
-
-    if (priceChange24h) {
-      const changeEmoji = priceChange24h >= 0 ? '📈' : '📉';
-      message += `${changeEmoji} *24h Change:* ${priceChange24h > 0 ? '+' : ''}${priceChange24h.toFixed(2)}%\n`;
-    }
-
-    if (liquidity) {
-      const liqFormatted = liquidity >= 1000000
-        ? `$${(liquidity / 1000000).toFixed(2)}M`
-        : `$${liquidity.toLocaleString()}`;
-      message += `💧 *Liquidity:* ${liqFormatted}\n`;
-    }
-
-    if (holders) {
-      message += `👥 *Holders:* ${holders.toLocaleString()}\n`;
-    }
-
-    if (createdAt) {
-      const createdDate = new Date(createdAt);
-      const now = new Date();
-      const ageMs = now - createdDate;
-      const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
-      const ageHours = Math.floor((ageMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-
-      if (ageDays > 0) {
-        message += `⏰ *Age:* ${ageDays}d ${ageHours}h\n`;
-      } else {
-        message += `⏰ *Age:* ${ageHours}h\n`;
-      }
-    }
-
-    message += `\n📝 *Contract:* \`${contractAddress}\`\n`;
-
-    // Add social links
-    const socials = [];
-    if (website) socials.push(`[Website](${website})`);
-    if (twitter) socials.push(`[Twitter](${twitter})`);
-    if (telegram) socials.push(`[Telegram](${telegram})`);
-
-    if (socials.length > 0) {
-      message += `\n🔗 *Socials:* ${socials.join(' • ')}\n`;
-    }
-
-    // Send the message with image if available
-    if (tokenImage) {
-      try {
-        await bot.deleteMessage(chatId, loadingMsg.message_id);
-        await bot.sendPhoto(chatId, tokenImage, {
-          caption: message,
-          parse_mode: 'Markdown'
-        });
-      } catch (imageError) {
-        console.error('Error sending image:', imageError);
-        // Fall back to text only
-        await bot.editMessageText(message, {
-          chat_id: chatId,
-          message_id: loadingMsg.message_id,
-          parse_mode: 'Markdown'
-        });
-      }
-    } else {
-      // Send text only
-      await bot.editMessageText(message, {
-        chat_id: chatId,
-        message_id: loadingMsg.message_id,
-        parse_mode: 'Markdown'
-      });
-    }
+    // Send the formatted message
+    await bot.editMessageText(message, {
+      chat_id: chatId,
+      message_id: loadingMsg.message_id,
+      parse_mode: 'Markdown',
+      disable_web_page_preview: false
+    });
 
   } catch (error) {
     console.error('Error in /post command:', error);
     await bot.editMessageText(
       '❌ An error occurred while fetching token data. Please try again later.',
       { chat_id: chatId, message_id: loadingMsg.message_id }
-    );
+    ).catch(err => console.error('Error editing message:', err));
   }
+});
+
+// /bulkpost command - Process multiple contract addresses
+bot.onText(/\/bulkpost/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  bot.sendMessage(chatId,
+    `📋 *Bulk Post Mode*\n\n` +
+    `Send me contract addresses (one per line) and I'll fetch data for all of them.\n\n` +
+    `Example:\n` +
+    `\`\`\`\n` +
+    `8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump\n` +
+    `4az7oyuUFco8GedLkWYzopurgadkSz8n64xCEXNYpump\n` +
+    `H4EkHReWbjJpqNUiUeYNNZbNKLqLfH8Jt9MkceXGpump\n` +
+    `\`\`\`\n\n` +
+    `Just paste the addresses in your next message!`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// Handler for bulk processing (listens to plain text messages with multiple lines)
+bot.on('message', async (msg) => {
+  // Skip if it's a command
+  if (msg.text && msg.text.startsWith('/')) return;
+
+  const chatId = msg.chat.id;
+  const text = msg.text?.trim();
+
+  if (!text) return;
+
+  // Check if message contains multiple lines that look like contract addresses
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 30);
+
+  if (lines.length < 2) return; // Need at least 2 addresses for bulk mode
+
+  const contractAddresses = lines.filter(line => {
+    // Basic validation: Solana addresses are typically 32-44 characters
+    return line.length >= 32 && line.length <= 44 && /^[A-Za-z0-9]+$/.test(line);
+  });
+
+  if (contractAddresses.length === 0) return;
+
+  await bot.sendMessage(chatId, `🔄 Processing ${contractAddresses.length} tokens...`);
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (let i = 0; i < contractAddresses.length; i++) {
+    const ca = contractAddresses[i];
+
+    try {
+      const tokenData = await fetchSolscanV2Data(ca);
+
+      if (tokenData) {
+        const message = formatTokenData(tokenData, ca);
+
+        if (message) {
+          await bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            disable_web_page_preview: false
+          });
+          successCount++;
+
+          // Add delay between requests to avoid rate limiting
+          if (i < contractAddresses.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          }
+        } else {
+          failCount++;
+        }
+      } else {
+        failCount++;
+        await bot.sendMessage(chatId, `❌ Failed to fetch data for: \`${ca}\``, { parse_mode: 'Markdown' });
+      }
+    } catch (error) {
+      console.error(`Error processing ${ca}:`, error.message);
+      failCount++;
+    }
+  }
+
+  await bot.sendMessage(chatId,
+    `✅ *Bulk Processing Complete*\n\n` +
+    `✔️ Success: ${successCount}\n` +
+    `❌ Failed: ${failCount}\n` +
+    `📊 Total: ${contractAddresses.length}`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
 console.log('🤖 SearchTok Memecoin Tracker Bot is running...');
