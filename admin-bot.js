@@ -99,76 +99,117 @@ function isAdmin(userId) {
   return adminIds.includes(userId.toString());
 }
 
-// Fetch token data from DexScreener API
+// Helper functions for formatting
+const formatNumber = (num) => {
+  if (!num) return 'N/A';
+  if (num >= 1e9) return `$${(num / 1e9).toFixed(2)}B`;
+  if (num >= 1e6) return `$${(num / 1e6).toFixed(2)}M`;
+  if (num >= 1e3) return `$${(num / 1e3).toFixed(2)}K`;
+  return `$${num.toFixed(2)}`;
+};
+
+const formatPrice = (price) => {
+  if (!price) return 'N/A';
+  if (price < 0.000001) return `$${price.toExponential(2)}`;
+  if (price < 0.01) return `$${price.toFixed(6)}`;
+  return `$${price.toFixed(4)}`;
+};
+
+// Fetch token data from DexScreener API with retry and proper headers
+async function fetchFromDexScreener(contractAddress, retries = 3) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'application/json'
+  };
+
+  for (let i = 0; i < retries; i++) {
+    try {
+      // Add delay between retries to avoid rate limiting
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 2000 * i));
+      }
+
+      // Try search endpoint first (works better for new tokens)
+      let response = await axios.get(
+        `https://api.dexscreener.com/latest/dex/search?q=${contractAddress}`,
+        { headers, timeout: 10000 }
+      );
+
+      if (response.data && response.data.pairs && response.data.pairs.length > 0) {
+        return response.data.pairs[0];
+      }
+
+      // Try direct token lookup
+      response = await axios.get(
+        `https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`,
+        { headers, timeout: 10000 }
+      );
+
+      if (response.data && response.data.pairs && response.data.pairs.length > 0) {
+        return response.data.pairs[0];
+      }
+    } catch (error) {
+      console.log(`DexScreener attempt ${i + 1} failed:`, error.message);
+      if (i === retries - 1) {
+        throw error;
+      }
+    }
+  }
+
+  return null;
+}
+
+// Parse token data from DexScreener pair
+function parseDexScreenerPair(pair, contractAddress) {
+  // Calculate token age
+  const createdAt = new Date(pair.pairCreatedAt);
+  const now = new Date();
+  const ageInDays = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
+  const ageInHours = Math.floor((now - createdAt) / (1000 * 60 * 60));
+
+  let ageText;
+  if (ageInDays > 0) {
+    ageText = `${ageInDays} day${ageInDays > 1 ? 's' : ''} old`;
+  } else if (ageInHours > 0) {
+    ageText = `${ageInHours} hour${ageInHours > 1 ? 's' : ''} old`;
+  } else {
+    const ageInMinutes = Math.floor((now - createdAt) / (1000 * 60));
+    ageText = `${ageInMinutes} minute${ageInMinutes > 1 ? 's' : ''} old`;
+  }
+
+  return {
+    symbol: pair.baseToken.symbol,
+    name: pair.baseToken.name,
+    contractAddress: contractAddress,
+    price: formatPrice(parseFloat(pair.priceUsd)),
+    marketCap: formatNumber(pair.marketCap),
+    liquidity: formatNumber(pair.liquidity?.usd),
+    volume24h: formatNumber(pair.volume?.h24),
+    priceChange24h: pair.priceChange?.h24 ? `${pair.priceChange.h24.toFixed(2)}%` : 'N/A',
+    age: ageText,
+    createdAt: createdAt.toLocaleDateString(),
+    imageUrl: pair.info?.imageUrl || null,
+    websites: pair.info?.websites || [],
+    socials: pair.info?.socials || [],
+    dexScreenerUrl: `https://dexscreener.com/solana/${contractAddress}`
+  };
+}
+
+// Main fetch function with fallbacks
 async function fetchTokenData(contractAddress) {
   try {
-    // Try direct token lookup first
-    let response = await axios.get(
-      `https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`
-    );
+    console.log(`Fetching token data for: ${contractAddress}`);
 
-    // If no pairs found, try search endpoint (better for new pump.fun tokens)
-    if (!response.data || !response.data.pairs || response.data.pairs.length === 0) {
-      response = await axios.get(
-        `https://api.dexscreener.com/latest/dex/search?q=${contractAddress}`
-      );
+    // Try DexScreener
+    const pair = await fetchFromDexScreener(contractAddress);
+
+    if (pair) {
+      console.log('Token data found on DexScreener');
+      return parseDexScreenerPair(pair, contractAddress);
     }
 
-    if (!response.data || !response.data.pairs || response.data.pairs.length === 0) {
-      return null;
-    }
-
-    // Get the primary pair (usually the first one with highest liquidity)
-    const pair = response.data.pairs[0];
-
-    // Calculate token age
-    const createdAt = new Date(pair.pairCreatedAt);
-    const now = new Date();
-    const ageInDays = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
-    const ageInHours = Math.floor((now - createdAt) / (1000 * 60 * 60));
-
-    let ageText;
-    if (ageInDays > 0) {
-      ageText = `${ageInDays} day${ageInDays > 1 ? 's' : ''} old`;
-    } else if (ageInHours > 0) {
-      ageText = `${ageInHours} hour${ageInHours > 1 ? 's' : ''} old`;
-    } else {
-      const ageInMinutes = Math.floor((now - createdAt) / (1000 * 60));
-      ageText = `${ageInMinutes} minute${ageInMinutes > 1 ? 's' : ''} old`;
-    }
-
-    // Format numbers
-    const formatNumber = (num) => {
-      if (!num) return 'N/A';
-      if (num >= 1e9) return `$${(num / 1e9).toFixed(2)}B`;
-      if (num >= 1e6) return `$${(num / 1e6).toFixed(2)}M`;
-      if (num >= 1e3) return `$${(num / 1e3).toFixed(2)}K`;
-      return `$${num.toFixed(2)}`;
-    };
-
-    const formatPrice = (price) => {
-      if (!price) return 'N/A';
-      if (price < 0.000001) return `$${price.toExponential(2)}`;
-      if (price < 0.01) return `$${price.toFixed(6)}`;
-      return `$${price.toFixed(4)}`;
-    };
-
-    return {
-      symbol: pair.baseToken.symbol,
-      name: pair.baseToken.name,
-      contractAddress: contractAddress,
-      price: formatPrice(parseFloat(pair.priceUsd)),
-      marketCap: formatNumber(pair.marketCap),
-      liquidity: formatNumber(pair.liquidity?.usd),
-      volume24h: formatNumber(pair.volume?.h24),
-      priceChange24h: pair.priceChange?.h24 ? `${pair.priceChange.h24.toFixed(2)}%` : 'N/A',
-      age: ageText,
-      createdAt: createdAt.toLocaleDateString(),
-      imageUrl: pair.info?.imageUrl || null,
-      websites: pair.info?.websites || [],
-      socials: pair.info?.socials || [],
-      dexScreenerUrl: `https://dexscreener.com/solana/${contractAddress}`
-    };
+    console.log('Token not found on DexScreener');
+    return null;
   } catch (error) {
     console.error('Error fetching token data:', error.message);
     return null;
