@@ -267,11 +267,12 @@ bot.onText(/\/help/, (msg) => {
   if (isAdmin(userId)) {
     helpMessage += `
 👑 ADMIN COMMANDS:
-/post CONTRACT|MCAP|AGE|IMAGE_URL - Post memecoin with image
-  Example: /post 8Jx...pump|$22K|11 days old|https://...jpg
+/post <contract_address> - Auto-fetch and post memecoin
+  Example: /post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump
+  Fetches: image, market cap, age automatically
 
-/postman SYMBOL|NAME|CONTRACT|MCAP|PRICE|AGE|IMAGE - Post with all details
-  Example: /postman BONK|Bonk Coin|7Bg...pump|$1.2M|$0.00001|2 days|https://img.jpg
+/postman SYMBOL|NAME|CONTRACT|MCAP|PRICE|AGE|IMAGE - Manual post
+  Use if auto-fetch fails
 
 /subscribers - View subscriber count
     `;
@@ -440,7 +441,7 @@ bot.onText(/\/remove (.+)/, async (msg, match) => {
   }
 });
 
-// /post command (admin only) - Post with image, market cap, age, and CA
+// /post command (admin only) - Auto-fetch from contract address
 bot.onText(/\/post (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id.toString();
@@ -454,42 +455,44 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
     return;
   }
 
-  const input = match[1].trim();
-  const parts = input.split('|').map(p => p.trim());
+  const contractAddress = match[1].trim();
 
-  // Check if we have all required parts
-  if (parts.length < 4) {
+  // Basic validation for Solana contract address
+  if (contractAddress.length < 32 || contractAddress.length > 44) {
     bot.sendMessage(
       chatId,
-      `❌ Invalid format! Use:
-/post CONTRACT|MCAP|AGE|IMAGE_URL
-
-Example:
-/post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump|$22K|11 days old|https://cdn.dexscreener.com/...jpg
-
-Required:
-• Contract Address
-• Market Cap
-• Age
-• Image URL`
+      `❌ Invalid contract address format!\n\nUsage:\n/post <contract_address>\n\nExample:\n/post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump`
     );
     return;
   }
 
-  const contractAddress = parts[0];
-  const marketCap = parts[1];
-  const age = parts[2];
-  const imageUrl = parts[3];
+  // Show loading message
+  const loadingMsg = await bot.sendMessage(chatId, '⏳ Fetching token data...');
 
   try {
+    // Fetch token data
+    const tokenData = await fetchTokenData(contractAddress);
+
+    if (!tokenData) {
+      bot.deleteMessage(chatId, loadingMsg.message_id);
+      bot.sendMessage(
+        chatId,
+        `❌ Could not find token data.\n\nTried:\n• DexScreener API\n\nThe token might be too new or not yet indexed.`
+      );
+      return;
+    }
+
+    // Delete loading message
+    bot.deleteMessage(chatId, loadingMsg.message_id);
+
     const subscribers = await getSubscribers();
 
     // Create message with market cap, age, and CA
     const message = `
 🚀 NEW TIKTOK MEMECOIN ALERT! 🚀
 
-📈 Market Cap: ${marketCap}
-🕐 Age: ${age}
+📈 Market Cap: ${tokenData.marketCap}
+🕐 Age: ${tokenData.age}
 
 📝 CONTRACT:
 \`${contractAddress}\`
@@ -503,7 +506,11 @@ Required:
 
     for (const subscriber of subscribers) {
       try {
-        await bot.sendPhoto(subscriber.userId, imageUrl, { caption: message });
+        if (tokenData.imageUrl) {
+          await bot.sendPhoto(subscriber.userId, tokenData.imageUrl, { caption: message });
+        } else {
+          await bot.sendMessage(subscriber.userId, message);
+        }
         successCount++;
       } catch (error) {
         console.error(`Failed to send to user ${subscriber.userId}:`, error.message);
@@ -514,7 +521,11 @@ Required:
     // Send to channel if configured
     if (channelId) {
       try {
-        await bot.sendPhoto(channelId, imageUrl, { caption: message });
+        if (tokenData.imageUrl) {
+          await bot.sendPhoto(channelId, tokenData.imageUrl, { caption: message });
+        } else {
+          await bot.sendMessage(channelId, message);
+        }
         bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers and channel!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.` : ''}`);
       } catch (error) {
         console.error('Failed to send to channel:', error.message);
@@ -525,6 +536,7 @@ Required:
     }
   } catch (error) {
     console.error('Error posting memecoin:', error);
+    bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
     bot.sendMessage(chatId, '❌ An error occurred while posting the memecoin.');
   }
 });
