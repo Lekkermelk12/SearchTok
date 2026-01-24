@@ -2,6 +2,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs').promises;
 const path = require('path');
+const axios = require('axios');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const adminIds = process.env.ADMIN_USER_IDS
@@ -96,6 +97,74 @@ function isAdmin(userId) {
   return adminIds.includes(userId.toString());
 }
 
+// Fetch token data from DexScreener API
+async function fetchTokenData(contractAddress) {
+  try {
+    const response = await axios.get(
+      `https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`
+    );
+
+    if (!response.data || !response.data.pairs || response.data.pairs.length === 0) {
+      return null;
+    }
+
+    // Get the primary pair (usually the first one with highest liquidity)
+    const pair = response.data.pairs[0];
+
+    // Calculate token age
+    const createdAt = new Date(pair.pairCreatedAt);
+    const now = new Date();
+    const ageInDays = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
+    const ageInHours = Math.floor((now - createdAt) / (1000 * 60 * 60));
+
+    let ageText;
+    if (ageInDays > 0) {
+      ageText = `${ageInDays} day${ageInDays > 1 ? 's' : ''} old`;
+    } else if (ageInHours > 0) {
+      ageText = `${ageInHours} hour${ageInHours > 1 ? 's' : ''} old`;
+    } else {
+      const ageInMinutes = Math.floor((now - createdAt) / (1000 * 60));
+      ageText = `${ageInMinutes} minute${ageInMinutes > 1 ? 's' : ''} old`;
+    }
+
+    // Format numbers
+    const formatNumber = (num) => {
+      if (!num) return 'N/A';
+      if (num >= 1e9) return `$${(num / 1e9).toFixed(2)}B`;
+      if (num >= 1e6) return `$${(num / 1e6).toFixed(2)}M`;
+      if (num >= 1e3) return `$${(num / 1e3).toFixed(2)}K`;
+      return `$${num.toFixed(2)}`;
+    };
+
+    const formatPrice = (price) => {
+      if (!price) return 'N/A';
+      if (price < 0.000001) return `$${price.toExponential(2)}`;
+      if (price < 0.01) return `$${price.toFixed(6)}`;
+      return `$${price.toFixed(4)}`;
+    };
+
+    return {
+      symbol: pair.baseToken.symbol,
+      name: pair.baseToken.name,
+      contractAddress: contractAddress,
+      price: formatPrice(parseFloat(pair.priceUsd)),
+      marketCap: formatNumber(pair.marketCap),
+      liquidity: formatNumber(pair.liquidity?.usd),
+      volume24h: formatNumber(pair.volume?.h24),
+      priceChange24h: pair.priceChange?.h24 ? `${pair.priceChange.h24.toFixed(2)}%` : 'N/A',
+      age: ageText,
+      createdAt: createdAt.toLocaleDateString(),
+      imageUrl: pair.info?.imageUrl || null,
+      websites: pair.info?.websites || [],
+      socials: pair.info?.socials || [],
+      dexScreenerUrl: `https://dexscreener.com/solana/${contractAddress}`
+    };
+  } catch (error) {
+    console.error('Error fetching token data:', error.message);
+    return null;
+  }
+}
+
 // /start command
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
@@ -147,8 +216,9 @@ bot.onText(/\/help/, (msg) => {
   if (isAdmin(userId)) {
     helpMessage += `
 👑 ADMIN COMMANDS:
-/post <symbol> <contract> <name> <description> - Post memecoin to all subscribers
-  Example: /post BONK 7Bg...MV BonkCoin A fun dog-themed memecoin
+/post <contract_address> - Post memecoin to all subscribers
+  Just drop the contract address and the bot fetches all data automatically!
+  Example: /post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump
 
 /subscribers - View subscriber count
     `;
@@ -317,7 +387,7 @@ bot.onText(/\/remove (.+)/, async (msg, match) => {
   }
 });
 
-// /post command (admin only)
+// /post command (admin only) - Simplified: just provide contract address
 bot.onText(/\/post (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id.toString();
@@ -328,40 +398,78 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
     return;
   }
 
-  const input = match[1].trim();
-  const parts = input.split(/\s+/);
+  const contractAddress = match[1].trim();
 
-  if (parts.length < 4) {
+  // Basic validation for Solana contract address (usually 32-44 characters)
+  if (contractAddress.length < 32 || contractAddress.length > 44) {
     bot.sendMessage(
       chatId,
-      `❌ Invalid format! Use:\n/post <symbol> <contract> <name> <description>\n\nExample:\n/post BONK 7Bg...MV BonkCoin A fun dog-themed memecoin from TikTok`
+      `❌ Invalid contract address format!\n\nUsage:\n/post <contract_address>\n\nExample:\n/post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump`
     );
     return;
   }
 
-  const symbol = parts[0].toUpperCase();
-  const contractAddress = parts[1];
-  const name = parts[2];
-  const description = parts.slice(3).join(' ');
+  // Show loading message
+  const loadingMsg = await bot.sendMessage(chatId, '⏳ Fetching token data from DexScreener...');
 
   try {
+    // Fetch token data
+    const tokenData = await fetchTokenData(contractAddress);
+
+    if (!tokenData) {
+      bot.deleteMessage(chatId, loadingMsg.message_id);
+      bot.sendMessage(
+        chatId,
+        `❌ Could not find token data for this contract address.\n\nMake sure:\n• The address is correct\n• The token is listed on DexScreener\n• The token has active trading pairs`
+      );
+      return;
+    }
+
+    // Delete loading message
+    bot.deleteMessage(chatId, loadingMsg.message_id);
+
     const subscribers = await getSubscribers();
 
     if (subscribers.length === 0) {
-      bot.sendMessage(chatId, '⚠️ No subscribers yet! Post will not be sent.');
-      return;
+      bot.sendMessage(chatId, '⚠️ No subscribers yet! Posting to channel only (if configured).');
+    }
+
+    // Build socials section
+    let socialsText = '';
+    if (tokenData.socials && tokenData.socials.length > 0) {
+      socialsText += '\n🔗 Socials:\n';
+      tokenData.socials.forEach(social => {
+        const icon = social.type === 'twitter' ? '🐦' :
+                     social.type === 'telegram' ? '💬' :
+                     social.type === 'discord' ? '💭' : '🔗';
+        socialsText += `${icon} ${social.type.charAt(0).toUpperCase() + social.type.slice(1)}: ${social.url}\n`;
+      });
+    }
+
+    if (tokenData.websites && tokenData.websites.length > 0) {
+      socialsText += tokenData.websites.map(site => `🌐 Website: ${site.url}`).join('\n') + '\n';
     }
 
     // Create the message
     const message = `
 🚀 NEW TIKTOK MEMECOIN ALERT! 🚀
 
-💎 Symbol: ${symbol}
-📛 Name: ${name}
-📝 Contract: ${contractAddress}
+💎 ${tokenData.symbol} | ${tokenData.name}
 
-📖 Description:
-${description}
+📊 MARKET DATA:
+💵 Price: ${tokenData.price}
+📈 Market Cap: ${tokenData.marketCap}
+💧 Liquidity: ${tokenData.liquidity}
+📊 24h Volume: ${tokenData.volume24h}
+📉 24h Change: ${tokenData.priceChange24h}
+
+⏰ AGE:
+🕐 ${tokenData.age} (Created: ${tokenData.createdAt})
+
+📝 CONTRACT:
+\`${tokenData.contractAddress}\`
+${socialsText}
+🔍 DexScreener: ${tokenData.dexScreenerUrl}
 
 ⏰ Posted: ${new Date().toLocaleString()}
     `;
@@ -372,7 +480,11 @@ ${description}
 
     for (const subscriber of subscribers) {
       try {
-        await bot.sendMessage(subscriber.userId, message);
+        if (tokenData.imageUrl) {
+          await bot.sendPhoto(subscriber.userId, tokenData.imageUrl, { caption: message });
+        } else {
+          await bot.sendMessage(subscriber.userId, message);
+        }
         successCount++;
       } catch (error) {
         console.error(`Failed to send to user ${subscriber.userId}:`, error.message);
@@ -383,7 +495,11 @@ ${description}
     // Send to channel if configured
     if (channelId) {
       try {
-        await bot.sendMessage(channelId, message);
+        if (tokenData.imageUrl) {
+          await bot.sendPhoto(channelId, tokenData.imageUrl, { caption: message });
+        } else {
+          await bot.sendMessage(channelId, message);
+        }
         bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers and channel!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.` : ''}`);
       } catch (error) {
         console.error('Failed to send to channel:', error.message);
@@ -394,6 +510,7 @@ ${description}
     }
   } catch (error) {
     console.error('Error posting memecoin:', error);
+    bot.deleteMessage(chatId, loadingMsg.message_id);
     bot.sendMessage(chatId, '❌ An error occurred while posting the memecoin.');
   }
 });

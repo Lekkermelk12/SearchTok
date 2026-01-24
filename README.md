@@ -10,7 +10,8 @@ A Telegram bot for tracking TikTok Solana memecoins. Subscribe to get notificati
 - **Persistent Storage**: Your data is saved between restarts
 
 ### For Admins
-- **Broadcast Posts**: Manually post memecoin information to all subscribers
+- **Auto-Fetch Token Data**: Simply drop a contract address and the bot fetches all token info from DexScreener
+- **Broadcast Posts**: Post memecoin information (with image) to all subscribers
 - **Channel Integration**: Optionally post to a Telegram channel
 - **Subscriber Management**: View subscriber count and recent subscribers
 
@@ -97,7 +98,9 @@ You should see: `🤖 SearchTok Memecoin Tracker Bot is running...`
 
 (Only available to users listed in `ADMIN_USER_IDS`)
 
-- `/post <symbol> <contract> <name> <description>` - Broadcast a memecoin to all subscribers
+- `/post <contract_address>` - Automatically fetch and broadcast memecoin data to all subscribers
+  - Fetches token name, symbol, price, market cap, liquidity, age, socials, and image
+  - Posts to both subscribers and channel (if configured)
 - `/subscribers` - View subscriber count and recent subscribers
 
 ### Examples
@@ -109,8 +112,15 @@ You should see: `🤖 SearchTok Memecoin Tracker Bot is running...`
 
 **Admin posting a memecoin:**
 ```
-/post BONK 7BgBvyjrZX1YKz4oh9mjb8ZScatkkwb8DzFx4e7PCRMV BonkCoin A fun dog-themed memecoin trending on TikTok
+/post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump
 ```
+The bot automatically fetches all token data including:
+- Token name and symbol
+- Price, market cap, and liquidity
+- 24h volume and price change
+- Token age and creation date
+- Social media links
+- Token image
 
 **Add a memecoin to personal tracker:**
 ```
