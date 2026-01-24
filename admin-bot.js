@@ -115,101 +115,138 @@ const formatPrice = (price) => {
   return `$${price.toFixed(4)}`;
 };
 
-// Fetch token data from DexScreener API with retry and proper headers
-async function fetchFromDexScreener(contractAddress, retries = 3) {
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Accept': 'application/json'
-  };
-
-  for (let i = 0; i < retries; i++) {
-    try {
-      // Add delay between retries to avoid rate limiting
-      if (i > 0) {
-        await new Promise(resolve => setTimeout(resolve, 2000 * i));
+// Fetch token metadata from Solscan
+async function fetchFromSolscan(contractAddress) {
+  try {
+    const response = await axios.get(
+      `https://api.solscan.io/v2/token/meta?address=${contractAddress}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': 'application/json'
+        },
+        timeout: 10000
       }
+    );
 
-      // Try search endpoint first (works better for new tokens)
-      let response = await axios.get(
-        `https://api.dexscreener.com/latest/dex/search?q=${contractAddress}`,
-        { headers, timeout: 10000 }
-      );
-
-      if (response.data && response.data.pairs && response.data.pairs.length > 0) {
-        return response.data.pairs[0];
-      }
-
-      // Try direct token lookup
-      response = await axios.get(
-        `https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`,
-        { headers, timeout: 10000 }
-      );
-
-      if (response.data && response.data.pairs && response.data.pairs.length > 0) {
-        return response.data.pairs[0];
-      }
-    } catch (error) {
-      console.log(`DexScreener attempt ${i + 1} failed:`, error.message);
-      if (i === retries - 1) {
-        throw error;
-      }
+    if (response.data && response.data.data) {
+      const data = response.data.data;
+      return {
+        symbol: data.symbol || null,
+        name: data.name || null,
+        icon: data.icon || null,
+        decimals: data.decimals || 9,
+        supply: data.supply || null
+      };
     }
+  } catch (error) {
+    console.log('Solscan metadata failed:', error.message);
   }
-
   return null;
 }
 
-// Parse token data from DexScreener pair
-function parseDexScreenerPair(pair, contractAddress) {
-  // Calculate token age
-  const createdAt = new Date(pair.pairCreatedAt);
-  const now = new Date();
-  const ageInDays = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
-  const ageInHours = Math.floor((now - createdAt) / (1000 * 60 * 60));
+// Fetch token market data from Solscan
+async function fetchMarketDataFromSolscan(contractAddress) {
+  try {
+    const response = await axios.get(
+      `https://api.solscan.io/v2/token/price?address=${contractAddress}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
 
-  let ageText;
-  if (ageInDays > 0) {
-    ageText = `${ageInDays} day${ageInDays > 1 ? 's' : ''} old`;
-  } else if (ageInHours > 0) {
-    ageText = `${ageInHours} hour${ageInHours > 1 ? 's' : ''} old`;
-  } else {
-    const ageInMinutes = Math.floor((now - createdAt) / (1000 * 60));
-    ageText = `${ageInMinutes} minute${ageInMinutes > 1 ? 's' : ''} old`;
+    if (response.data && response.data.data) {
+      const data = response.data.data;
+      return {
+        price: data.price || 0,
+        marketCap: data.market_cap || 0,
+        volume24h: data.volume_24h || 0
+      };
+    }
+  } catch (error) {
+    console.log('Solscan market data failed:', error.message);
   }
-
-  return {
-    symbol: pair.baseToken.symbol,
-    name: pair.baseToken.name,
-    contractAddress: contractAddress,
-    price: formatPrice(parseFloat(pair.priceUsd)),
-    marketCap: formatNumber(pair.marketCap),
-    liquidity: formatNumber(pair.liquidity?.usd),
-    volume24h: formatNumber(pair.volume?.h24),
-    priceChange24h: pair.priceChange?.h24 ? `${pair.priceChange.h24.toFixed(2)}%` : 'N/A',
-    age: ageText,
-    createdAt: createdAt.toLocaleDateString(),
-    imageUrl: pair.info?.imageUrl || null,
-    websites: pair.info?.websites || [],
-    socials: pair.info?.socials || [],
-    dexScreenerUrl: `https://dexscreener.com/solana/${contractAddress}`
-  };
+  return null;
 }
 
-// Main fetch function with fallbacks
+// Fetch token creation time
+async function fetchTokenAge(contractAddress) {
+  try {
+    // Try to get first transaction timestamp
+    const response = await axios.get(
+      `https://api.solscan.io/v2/account/transaction?address=${contractAddress}&limit=1`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+
+    if (response.data && response.data.data && response.data.data.length > 0) {
+      const firstTx = response.data.data[response.data.data.length - 1];
+      const createdAt = new Date(firstTx.block_time * 1000);
+      const now = new Date();
+      const ageInDays = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
+      const ageInHours = Math.floor((now - createdAt) / (1000 * 60 * 60));
+
+      let ageText;
+      if (ageInDays > 0) {
+        ageText = `${ageInDays} day${ageInDays > 1 ? 's' : ''} old`;
+      } else if (ageInHours > 0) {
+        ageText = `${ageInHours} hour${ageInHours > 1 ? 's' : ''} old`;
+      } else {
+        const ageInMinutes = Math.floor((now - createdAt) / (1000 * 60));
+        ageText = `${ageInMinutes} minute${ageInMinutes > 1 ? 's' : ''} old`;
+      }
+
+      return {
+        age: ageText,
+        createdAt: createdAt.toLocaleDateString()
+      };
+    }
+  } catch (error) {
+    console.log('Token age fetch failed:', error.message);
+  }
+  return { age: 'Unknown', createdAt: 'Unknown' };
+}
+
+// Main fetch function using Solscan
 async function fetchTokenData(contractAddress) {
   try {
     console.log(`Fetching token data for: ${contractAddress}`);
 
-    // Try DexScreener
-    const pair = await fetchFromDexScreener(contractAddress);
+    // Fetch metadata, market data, and age in parallel
+    const [metadata, marketData, ageData] = await Promise.all([
+      fetchFromSolscan(contractAddress),
+      fetchMarketDataFromSolscan(contractAddress),
+      fetchTokenAge(contractAddress)
+    ]);
 
-    if (pair) {
-      console.log('Token data found on DexScreener');
-      return parseDexScreenerPair(pair, contractAddress);
+    if (!metadata && !marketData) {
+      console.log('Could not fetch token data from Solscan');
+      return null;
     }
 
-    console.log('Token not found on DexScreener');
-    return null;
+    console.log('Token data fetched successfully');
+
+    return {
+      symbol: metadata?.symbol || 'UNKNOWN',
+      name: metadata?.name || 'Unknown Token',
+      contractAddress: contractAddress,
+      price: marketData ? formatPrice(marketData.price) : 'N/A',
+      marketCap: marketData ? formatNumber(marketData.marketCap) : 'N/A',
+      volume24h: marketData ? formatNumber(marketData.volume24h) : 'N/A',
+      age: ageData.age,
+      createdAt: ageData.createdAt,
+      imageUrl: metadata?.icon || null,
+      dexScreenerUrl: `https://dexscreener.com/solana/${contractAddress}`
+    };
   } catch (error) {
     console.error('Error fetching token data:', error.message);
     return null;
