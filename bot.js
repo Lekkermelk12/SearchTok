@@ -63,6 +63,43 @@ async function fetchSolscanV2Data(contractAddress) {
   }
 }
 
+// Fetch token data from DexScreener (fallback)
+async function fetchDexScreenerData(contractAddress) {
+  try {
+    const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`, {
+      timeout: 15000
+    });
+
+    if (response.data && response.data.pairs && response.data.pairs.length > 0) {
+      return response.data.pairs[0];
+    }
+    return null;
+  } catch (error) {
+    console.log('DexScreener fetch failed:', error.message);
+    return null;
+  }
+}
+
+// Get token data with fallback
+async function getTokenData(contractAddress) {
+  // Try Solscan first
+  let solscanData = await fetchSolscanV2Data(contractAddress);
+
+  if (solscanData) {
+    return { source: 'solscan', data: solscanData };
+  }
+
+  // Fallback to DexScreener
+  console.log('Trying DexScreener fallback...');
+  let dexData = await fetchDexScreenerData(contractAddress);
+
+  if (dexData) {
+    return { source: 'dexscreener', data: dexData };
+  }
+
+  return null;
+}
+
 // Calculate token age from created_time
 function calculateTokenAge(createdTime) {
   if (!createdTime) return null;
@@ -85,15 +122,30 @@ function calculateTokenAge(createdTime) {
 }
 
 // Format token data for posting
-function formatTokenData(data, contractAddress) {
-  if (!data) return null;
+function formatTokenData(result, contractAddress) {
+  if (!result || !result.data) return null;
 
-  const name = data.name || 'Unknown';
-  const symbol = data.symbol || 'Unknown';
-  const marketCap = data.market_cap;
-  const holders = data.holder;
-  const age = calculateTokenAge(data.created_time);
-  const price = data.price;
+  const source = result.source;
+  const data = result.data;
+
+  let name, symbol, marketCap, holders, age, price;
+
+  if (source === 'solscan') {
+    name = data.name || 'Unknown';
+    symbol = data.symbol || 'Unknown';
+    marketCap = data.market_cap;
+    holders = data.holder;
+    age = calculateTokenAge(data.created_time);
+    price = data.price;
+  } else if (source === 'dexscreener') {
+    name = data.baseToken?.name || 'Unknown';
+    symbol = data.baseToken?.symbol || 'Unknown';
+    marketCap = data.marketCap || data.fdv;
+    price = data.priceUsd;
+    // DexScreener doesn't have holders or created_time
+    holders = null;
+    age = null;
+  }
 
   let message = `🪙 *${name}* ($${symbol})\n\n`;
 
@@ -120,6 +172,10 @@ function formatTokenData(data, contractAddress) {
 
   message += `\n📝 *CA:* \`${contractAddress}\`\n`;
   message += `\n🔗 [Solscan](https://solscan.io/token/${contractAddress}) • [DexScreener](https://dexscreener.com/solana/${contractAddress})`;
+
+  if (source === 'dexscreener') {
+    message += `\n\n⚠️ _Data from DexScreener (Solscan unavailable)_`;
+  }
 
   return message;
 }
@@ -286,21 +342,21 @@ bot.onText(/\/remove (.+)/, async (msg, match) => {
   }
 });
 
-// /post command - Fetch and display token data from Solscan
+// /post command - Fetch and display token data
 bot.onText(/\/post (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const contractAddress = match[1].trim();
 
   // Send initial message
-  const loadingMsg = await bot.sendMessage(chatId, '🔍 Fetching token data from Solscan...');
+  const loadingMsg = await bot.sendMessage(chatId, '🔍 Fetching token data...');
 
   try {
-    const tokenData = await fetchSolscanV2Data(contractAddress);
+    const tokenData = await getTokenData(contractAddress);
 
     if (!tokenData) {
       await bot.editMessageText(
         `❌ Could not find token data for this address.\n\n` +
-        `The token might be too new or not yet indexed on Solscan.\n\n` +
+        `The token might be too new or not yet indexed.\n\n` +
         `📝 CA: \`${contractAddress}\``,
         { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'Markdown' }
       );
@@ -383,7 +439,7 @@ bot.on('message', async (msg) => {
     const ca = contractAddresses[i];
 
     try {
-      const tokenData = await fetchSolscanV2Data(ca);
+      const tokenData = await getTokenData(ca);
 
       if (tokenData) {
         const message = formatTokenData(tokenData, ca);
