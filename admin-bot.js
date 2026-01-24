@@ -267,9 +267,12 @@ bot.onText(/\/help/, (msg) => {
   if (isAdmin(userId)) {
     helpMessage += `
 👑 ADMIN COMMANDS:
-/post <contract_address> - Post memecoin to all subscribers
-  Just drop the contract address and the bot fetches all data automatically!
+/post <contract_address> - Auto-fetch and post (may be blocked by API)
   Example: /post 8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump
+
+/postman SYMBOL|NAME|CONTRACT|MCAP|PRICE|AGE|IMAGE - Manual post
+  Example: /postman BONK|Bonk Coin|7Bg...pump|$1.2M|$0.00001|2 days|https://img.jpg
+  Minimum: SYMBOL|NAME|CONTRACT|MCAP
 
 /subscribers - View subscriber count
     `;
@@ -565,6 +568,111 @@ ${socialsText}
   } catch (error) {
     console.error('Error posting memecoin:', error);
     bot.deleteMessage(chatId, loadingMsg.message_id);
+    bot.sendMessage(chatId, '❌ An error occurred while posting the memecoin.');
+  }
+});
+
+// /postman command (admin only) - Manual posting with custom data
+bot.onText(/\/postman (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id.toString();
+
+  // Check if user is admin
+  if (!isAdmin(userId)) {
+    bot.sendMessage(chatId, '❌ This command is only available to admins.');
+    return;
+  }
+
+  const input = match[1].trim();
+  const parts = input.split('|').map(p => p.trim());
+
+  if (parts.length < 4) {
+    bot.sendMessage(
+      chatId,
+      `❌ Invalid format! Use:
+/postman SYMBOL|NAME|CONTRACT|MCAP|PRICE|AGE|IMAGE_URL
+
+Example:
+/postman BONK|Bonk Coin|7Bg...pump|$1.2M|$0.000012|2 days old|https://...jpg
+
+Minimum required: SYMBOL|NAME|CONTRACT|MCAP
+Optional: PRICE|AGE|IMAGE_URL`
+    );
+    return;
+  }
+
+  const symbol = parts[0].toUpperCase();
+  const name = parts[1];
+  const contractAddress = parts[2];
+  const marketCap = parts[3];
+  const price = parts[4] || 'N/A';
+  const age = parts[5] || 'Just launched';
+  const imageUrl = parts[6] || null;
+
+  try {
+    const subscribers = await getSubscribers();
+
+    if (subscribers.length === 0) {
+      bot.sendMessage(chatId, '⚠️ No subscribers yet! Posting to channel only (if configured).');
+    }
+
+    // Create the message
+    const message = `
+🚀 NEW TIKTOK MEMECOIN ALERT! 🚀
+
+💎 ${symbol} | ${name}
+
+📊 MARKET DATA:
+💵 Price: ${price}
+📈 Market Cap: ${marketCap}
+
+⏰ AGE:
+🕐 ${age}
+
+📝 CONTRACT:
+\`${contractAddress}\`
+
+🔍 Check it out: https://dexscreener.com/solana/${contractAddress}
+
+⏰ Posted: ${new Date().toLocaleString()}
+    `;
+
+    // Send to all subscribers
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const subscriber of subscribers) {
+      try {
+        if (imageUrl) {
+          await bot.sendPhoto(subscriber.userId, imageUrl, { caption: message });
+        } else {
+          await bot.sendMessage(subscriber.userId, message);
+        }
+        successCount++;
+      } catch (error) {
+        console.error(`Failed to send to user ${subscriber.userId}:`, error.message);
+        failCount++;
+      }
+    }
+
+    // Send to channel if configured
+    if (channelId) {
+      try {
+        if (imageUrl) {
+          await bot.sendPhoto(channelId, imageUrl, { caption: message });
+        } else {
+          await bot.sendMessage(channelId, message);
+        }
+        bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers and channel!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.` : ''}`);
+      } catch (error) {
+        console.error('Failed to send to channel:', error.message);
+        bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.\n` : ''}❌ Failed to post to channel.`);
+      }
+    } else {
+      bot.sendMessage(chatId, `✅ Posted to ${successCount} subscribers!\n\n${failCount > 0 ? `⚠️ ${failCount} failed deliveries.` : ''}`);
+    }
+  } catch (error) {
+    console.error('Error posting memecoin:', error);
     bot.sendMessage(chatId, '❌ An error occurred while posting the memecoin.');
   }
 });
