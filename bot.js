@@ -18,6 +18,8 @@ if (!token) {
 const bot = new TelegramBot(token, { polling: true });
 const DATA_FILE = path.join(__dirname, 'memecoins.json');
 
+console.log('Admin IDs configured:', adminIds);
+
 // Load memecoins data from file
 async function loadMemecoins() {
   try {
@@ -399,6 +401,9 @@ bot.onText(/\/remove (.+)/, async (msg, match) => {
 bot.onText(/\/post (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id.toString();
+
+  console.log(`/post command received from user ID: ${userId}`);
+  console.log(`Is admin: ${isAdmin(userId)}`);
 
   // Check if user is admin
   if (!isAdmin(userId)) {
