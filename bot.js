@@ -163,15 +163,45 @@ async function fetchDexScreenerData(contractAddress) {
   }
 }
 
+// Fetch token holder count from gmgn.ai
+async function fetchGmgnHolderCount(contractAddress) {
+  try {
+    const response = await axios.get(`https://gmgn.ai/defi/quotation/v1/tokens/sol/${contractAddress}`, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json'
+      }
+    });
+
+    if (response.data && response.data.data) {
+      console.log('📊 gmgn.ai holder_count:', response.data.data.holder_count);
+      return response.data.data.holder_count;
+    }
+    return null;
+  } catch (error) {
+    console.log('gmgn.ai fetch failed:', error.message);
+    return null;
+  }
+}
+
 // Get token data with fallback and combine sources
 async function getTokenData(contractAddress) {
   // Try DexScreener first (best for images and socials)
   console.log('Trying DexScreener...');
   let dexData = await fetchDexScreenerData(contractAddress);
 
+  // Also try gmgn.ai for holder count
+  console.log('Trying gmgn.ai for holder count...');
+  let holderCount = await fetchGmgnHolderCount(contractAddress);
+
   // Return DexScreener data if available
   if (dexData) {
-    return { source: 'dexscreener', data: dexData };
+    return {
+      source: 'dexscreener',
+      data: dexData,
+      holderCount: holderCount
+    };
   }
 
   // Fallback: try scraping Solscan
@@ -212,7 +242,7 @@ function formatTokenData(result, contractAddress) {
 
   const source = result.source;
   const data = result.data;
-  const solscanData = result.solscanData; // Additional Solscan data if available
+  const gmgnHolderCount = result.holderCount; // Holder count from gmgn.ai
 
   let name, symbol, marketCap, holders, age, price, imageUrl, socials;
 
@@ -252,8 +282,8 @@ function formatTokenData(result, contractAddress) {
       age = null;
     }
 
-    // Use transaction count as a proxy metric (no free API for holder count)
-    holders = null;
+    // Use holder count from gmgn.ai
+    holders = gmgnHolderCount || null;
 
     // Extract image from DexScreener
     imageUrl = data.info?.imageUrl || null;
