@@ -163,8 +163,8 @@ async function fetchDexScreenerData(contractAddress) {
   }
 }
 
-// Fetch token holder count from gmgn.ai
-async function fetchGmgnHolderCount(contractAddress) {
+// Fetch full token data from gmgn.ai
+async function fetchGmgnFullData(contractAddress) {
   try {
     const response = await axios.get(`https://gmgn.ai/defi/quotation/v1/tokens/sol/${contractAddress}`, {
       timeout: 10000,
@@ -175,8 +175,8 @@ async function fetchGmgnHolderCount(contractAddress) {
     });
 
     if (response.data && response.data.data) {
-      console.log('📊 gmgn.ai holder_count:', response.data.data.holder_count);
-      return response.data.data.holder_count;
+      console.log('📊 gmgn.ai full data received');
+      return response.data.data;
     }
     return null;
   } catch (error) {
@@ -191,16 +191,39 @@ async function getTokenData(contractAddress) {
   console.log('Trying DexScreener...');
   let dexData = await fetchDexScreenerData(contractAddress);
 
-  // Also try gmgn.ai for holder count
-  console.log('Trying gmgn.ai for holder count...');
-  let holderCount = await fetchGmgnHolderCount(contractAddress);
+  // Also try gmgn.ai for full data
+  console.log('Trying gmgn.ai for holder count and fallback...');
+  let gmgnData = await fetchGmgnFullData(contractAddress);
+
+  // Check if DexScreener has socials or images
+  let hasSocials = dexData?.info?.socials && dexData.info.socials.length > 0;
+  let hasImage = dexData?.info?.imageUrl;
+
+  // If DexScreener has data but no socials or images, use gmgn.ai as fallback
+  if (dexData && (!hasSocials && !hasImage) && gmgnData) {
+    console.log('📊 DexScreener has no socials/images, using gmgn.ai fallback');
+    return {
+      source: 'gmgn',
+      data: gmgnData,
+      dexData: dexData // Keep DexScreener data for price/MC
+    };
+  }
 
   // Return DexScreener data if available
   if (dexData) {
     return {
       source: 'dexscreener',
       data: dexData,
-      holderCount: holderCount
+      gmgnData: gmgnData // Include gmgn data for holder count
+    };
+  }
+
+  // If DexScreener failed but gmgn.ai has data, use gmgn.ai
+  if (gmgnData) {
+    console.log('📊 DexScreener failed, using gmgn.ai');
+    return {
+      source: 'gmgn',
+      data: gmgnData
     };
   }
 
@@ -242,7 +265,8 @@ function formatTokenData(result, contractAddress) {
 
   const source = result.source;
   const data = result.data;
-  const gmgnHolderCount = result.holderCount; // Holder count from gmgn.ai
+  const gmgnData = result.gmgnData; // gmgn.ai data for holder count
+  const dexData = result.dexData; // DexScreener data when gmgn is primary
 
   let name, symbol, marketCap, holders, age, price, imageUrl, socials;
 
@@ -255,6 +279,42 @@ function formatTokenData(result, contractAddress) {
     price = data.price;
     imageUrl = null;
     socials = {};
+  } else if (source === 'gmgn') {
+    // Using gmgn.ai as primary data source
+    name = data.name || 'Unknown';
+    symbol = data.symbol || 'Unknown';
+    marketCap = data.market_cap || data.fdv;
+    price = data.price;
+    holders = data.holder_count;
+
+    // Get age from gmgn.ai creation_timestamp (Unix timestamp in seconds)
+    if (data.creation_timestamp) {
+      age = calculateTokenAge(data.creation_timestamp);
+    } else {
+      age = null;
+    }
+
+    // Get image from gmgn.ai
+    imageUrl = data.logo || null;
+
+    // Extract socials from gmgn.ai
+    socials = {};
+    if (data.twitter) socials.twitter = data.twitter;
+    if (data.telegram) socials.telegram = data.telegram;
+    if (data.website) {
+      // Smart TikTok detection for website field
+      if (data.website.includes('tiktok.com')) {
+        socials.tiktok = data.website;
+      } else {
+        socials.website = data.website;
+      }
+    }
+
+    // If we have DexScreener data too, prefer its price/MC if available
+    if (dexData) {
+      price = dexData.priceUsd || price;
+      marketCap = dexData.marketCap || dexData.fdv || marketCap;
+    }
   } else if (source === 'dexscreener') {
     name = data.baseToken?.name || 'Unknown';
     symbol = data.baseToken?.symbol || 'Unknown';
@@ -282,8 +342,8 @@ function formatTokenData(result, contractAddress) {
       age = null;
     }
 
-    // Use holder count from gmgn.ai
-    holders = gmgnHolderCount || null;
+    // Use holder count from gmgn.ai if available
+    holders = gmgnData?.holder_count || null;
 
     // Extract image from DexScreener
     imageUrl = data.info?.imageUrl || null;
