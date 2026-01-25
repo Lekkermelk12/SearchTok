@@ -134,47 +134,127 @@ function formatAge(tokenData) {
 // /scan command - Manually add a token to track
 bot.onText(/\/scan (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const contractAddress = match[1].trim();
+  const input = match[1].trim();
 
-  const loadingMsg = await bot.sendMessage(chatId, '⏳ Scanning token...');
+  // Check if it's a single address or multiple (bulk scan)
+  const addresses = input.split(/[\s\n,]+/).filter(addr => {
+    return addr.length >= 32 && addr.length <= 44 && /^[A-Za-z0-9]+$/.test(addr);
+  });
 
-  try {
-    const tokens = await loadTrackedTokens();
-    const exists = tokens.find(t => t.contractAddress === contractAddress);
+  if (addresses.length === 0) {
+    bot.sendMessage(chatId, '❌ No valid contract addresses found!', { parse_mode: 'Markdown' });
+    return;
+  }
 
-    if (exists) {
+  // Single token scan
+  if (addresses.length === 1) {
+    const contractAddress = addresses[0];
+    const loadingMsg = await bot.sendMessage(chatId, '⏳ Scanning token...');
+
+    try {
+      const tokens = await loadTrackedTokens();
+      const exists = tokens.find(t => t.contractAddress === contractAddress);
+
+      if (exists) {
+        await bot.editMessageText(
+          `✅ Token already tracked!\n\n*${exists.name}* ($${exists.symbol})`,
+          { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
+      const tokenData = await getTokenData(contractAddress);
+
+      if (!tokenData) {
+        await bot.editMessageText(
+          '❌ Could not fetch token data. Check the contract address and try again.',
+          { chat_id: chatId, message_id: loadingMsg.message_id }
+        );
+        return;
+      }
+
+      tokens.push(tokenData);
+      await saveTrackedTokens(tokens);
+
       await bot.editMessageText(
-        `✅ Token already tracked!\n\n*${exists.name}* ($${exists.symbol})`,
+        `✅ *Token Added!*\n\n` +
+        `*Name:* ${tokenData.name}\n` +
+        `*Symbol:* $${tokenData.symbol}\n` +
+        `*MC:* $${tokenData.marketCap ? (tokenData.marketCap/1000).toFixed(0)+'K' : 'N/A'}\n\n` +
+        `Total tracked: ${tokens.length} tokens`,
         { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'Markdown' }
       );
-      return;
-    }
-
-    const tokenData = await getTokenData(contractAddress);
-
-    if (!tokenData) {
+    } catch (error) {
+      console.error('Error scanning token:', error);
       await bot.editMessageText(
-        '❌ Could not fetch token data. Check the contract address and try again.',
+        '❌ Error scanning token. Please try again.',
         { chat_id: chatId, message_id: loadingMsg.message_id }
       );
-      return;
+    }
+    return;
+  }
+
+  // Bulk scan multiple tokens
+  const loadingMsg = await bot.sendMessage(chatId, `⏳ Scanning ${addresses.length} tokens...\n\nThis may take a while...`);
+
+  try {
+    let tokens = await loadTrackedTokens();
+    let added = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (let i = 0; i < addresses.length; i++) {
+      const ca = addresses[i];
+
+      // Check if already tracked
+      if (tokens.find(t => t.contractAddress === ca)) {
+        skipped++;
+        continue;
+      }
+
+      // Fetch token data
+      const tokenData = await getTokenData(ca);
+
+      if (tokenData) {
+        tokens.push(tokenData);
+        added++;
+        console.log(`  [${i+1}/${addresses.length}] Added: ${tokenData.name}`);
+      } else {
+        failed++;
+        console.log(`  [${i+1}/${addresses.length}] Failed: ${ca}`);
+      }
+
+      // Update progress every 5 tokens
+      if ((i + 1) % 5 === 0 || i === addresses.length - 1) {
+        await bot.editMessageText(
+          `⏳ Scanning ${addresses.length} tokens...\n\n` +
+          `Progress: ${i + 1}/${addresses.length}\n` +
+          `✅ Added: ${added}\n` +
+          `⏭️ Skipped: ${skipped}\n` +
+          `❌ Failed: ${failed}`,
+          { chat_id: chatId, message_id: loadingMsg.message_id }
+        );
+      }
+
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    tokens.push(tokenData);
     await saveTrackedTokens(tokens);
 
     await bot.editMessageText(
-      `✅ *Token Added!*\n\n` +
-      `*Name:* ${tokenData.name}\n` +
-      `*Symbol:* $${tokenData.symbol}\n` +
-      `*MC:* $${tokenData.marketCap ? (tokenData.marketCap/1000).toFixed(0)+'K' : 'N/A'}\n\n` +
+      `✅ *Bulk Scan Complete!*\n\n` +
+      `📊 Processed: ${addresses.length} addresses\n` +
+      `✅ Added: ${added} new tokens\n` +
+      `⏭️ Skipped: ${skipped} (already tracked)\n` +
+      `❌ Failed: ${failed}\n\n` +
       `Total tracked: ${tokens.length} tokens`,
       { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'Markdown' }
     );
   } catch (error) {
-    console.error('Error scanning token:', error);
+    console.error('Error bulk scanning:', error);
     await bot.editMessageText(
-      '❌ Error scanning token. Please try again.',
+      '❌ Error during bulk scan. Please try again.',
       { chat_id: chatId, message_id: loadingMsg.message_id }
     );
   }
@@ -219,8 +299,7 @@ Track and rank the hottest TikTok meme coins on Solana.
 📊 /rank - View top coins by market cap or age
 🔍 /filter - Filter coins by market cap and age ranges
   Example: \`/filter 100k-500k 1d-10d\`
-➕ /scan <CA> - Manually add a token to track
-  Example: \`/scan 6WdHhpRY7vL8SQ69bd89tAj3sk8jsjBrCLDUTZSNpump\`
+➕ /scan - Add historical tokens (paste multiple CAs)
 
 ℹ️ /help - Show this message
 
@@ -252,10 +331,12 @@ bot.onText(/\/help/, (msg) => {
   \`/filter 1m-5m 1h-3d\` - Coins between $1M-$5M MC, 1 hour to 3 days old
 
 *Manual Tracking:*
-/scan <contract_address> - Add a token to track
-  Example: \`/scan 6WdHhpRY7vL8SQ69bd89tAj3sk8jsjBrCLDUTZSNpump\`
+/scan <contract_address> - Add one or more tokens
+  Single: \`/scan 6WdHhpRY7vL8SQ69bd89tAj3sk8jsjBrCLDUTZSNpump\`
+  Bulk: Paste multiple CAs (space/newline separated)
 
-💡 Tokens are auto-tracked from channel posts, or manually with /scan!
+💡 Tokens are auto-tracked from new channel posts!
+💡 Use /scan to add historical tokens in bulk!
   `;
   bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 });
