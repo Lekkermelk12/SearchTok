@@ -307,14 +307,6 @@ function formatTokenData(result, contractAddress) {
     message += `⏰ *Age:* ${age}\n`;
   }
 
-  // Add transaction count from DexScreener if available
-  if (source === 'dexscreener' && data.txns) {
-    const total24h = (data.txns.h24?.buys || 0) + (data.txns.h24?.sells || 0);
-    if (total24h > 0) {
-      message += `📊 *24h Txns:* ${total24h.toLocaleString()}\n`;
-    }
-  }
-
   message += `\n📝 *CA:* \`${contractAddress}\`\n`;
 
   // Add text socials if they exist (keeping for backwards compatibility)
@@ -331,6 +323,12 @@ function formatTokenData(result, contractAddress) {
 
   // Add Bloom referral link
   message += `\n\n🌸 [Trade on Bloom](https://t.me/BloomSolana_bot?start=ref_cardboardg_${contractAddress})`;
+
+  // If no TikTok link, create a search link
+  if (!socials?.tiktok && name !== 'Unknown') {
+    const encodedName = encodeURIComponent(name);
+    socials.tiktok = `https://www.tiktok.com/search/video?q=${encodedName}&t=1769361824988`;
+  }
 
   return { message, imageUrl, socials };
 }
