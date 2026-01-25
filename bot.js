@@ -853,7 +853,9 @@ bot.onText(/\/chatid/, (msg) => {
 // /autoscan command - Control auto-scanner
 bot.onText(/\/autoscan (.+)/, (msg, match) => {
   const chatId = msg.chat.id;
-  const action = match[1].trim().toLowerCase();
+  const input = match[1].trim();
+  const parts = input.split(/\s+/);
+  const action = parts[0].toLowerCase();
 
   if (action === 'start') {
     const started = startAutoScanner();
@@ -890,16 +892,108 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
       `• Age Range: ${SCANNER_CONFIG.MIN_AGE_HOURS}h - ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
       `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
       `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n\n` +
-      `Commands: \`/autoscan start\` | \`/autoscan stop\``,
+      `Commands: \`/autoscan start\` | \`/autoscan stop\` | \`/autoscan config\``,
       { parse_mode: 'Markdown' }
     );
+  } else if (action === 'config') {
+    if (parts.length < 3) {
+      // Show config help
+      bot.sendMessage(chatId,
+        `⚙️ *Auto-Scanner Configuration*\n\n` +
+        `*Current Settings:*\n` +
+        `• Min Market Cap: $${SCANNER_CONFIG.MIN_MARKET_CAP.toLocaleString()}\n` +
+        `• Min 24h Volume: $${SCANNER_CONFIG.MIN_VOLUME_24H.toLocaleString()}\n` +
+        `• Min Age: ${SCANNER_CONFIG.MIN_AGE_HOURS}h\n` +
+        `• Max Age: ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
+        `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
+        `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n\n` +
+        `*Usage:*\n` +
+        `\`/autoscan config mc <amount>\` - Set min MC (e.g., 50000 for $50K)\n` +
+        `\`/autoscan config volume <amount>\` - Set min volume (e.g., 10000)\n` +
+        `\`/autoscan config minage <hours>\` - Set min age in hours (e.g., 1)\n` +
+        `\`/autoscan config maxage <days>\` - Set max age in days (e.g., 7)\n` +
+        `\`/autoscan config tiktok <yes/no>\` - Require TikTok link\n` +
+        `\`/autoscan config interval <minutes>\` - Scan interval (e.g., 5)\n\n` +
+        `*Examples:*\n` +
+        `\`/autoscan config mc 100000\` - Set min MC to $100K\n` +
+        `\`/autoscan config volume 20000\` - Set min volume to $20K\n` +
+        `\`/autoscan config tiktok no\` - Don't require TikTok`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    const setting = parts[1].toLowerCase();
+    const value = parts[2];
+
+    try {
+      if (setting === 'mc' || setting === 'marketcap') {
+        const amount = parseInt(value);
+        if (isNaN(amount) || amount < 0) {
+          bot.sendMessage(chatId, '❌ Invalid amount! Use a positive number (e.g., 50000)');
+          return;
+        }
+        SCANNER_CONFIG.MIN_MARKET_CAP = amount;
+        bot.sendMessage(chatId, `✅ Min Market Cap set to $${amount.toLocaleString()}`);
+      } else if (setting === 'volume' || setting === 'vol') {
+        const amount = parseInt(value);
+        if (isNaN(amount) || amount < 0) {
+          bot.sendMessage(chatId, '❌ Invalid amount! Use a positive number (e.g., 10000)');
+          return;
+        }
+        SCANNER_CONFIG.MIN_VOLUME_24H = amount;
+        bot.sendMessage(chatId, `✅ Min 24h Volume set to $${amount.toLocaleString()}`);
+      } else if (setting === 'minage') {
+        const hours = parseInt(value);
+        if (isNaN(hours) || hours < 0) {
+          bot.sendMessage(chatId, '❌ Invalid hours! Use a positive number (e.g., 1)');
+          return;
+        }
+        SCANNER_CONFIG.MIN_AGE_HOURS = hours;
+        bot.sendMessage(chatId, `✅ Min Age set to ${hours} hour${hours !== 1 ? 's' : ''}`);
+      } else if (setting === 'maxage') {
+        const days = parseInt(value);
+        if (isNaN(days) || days < 0) {
+          bot.sendMessage(chatId, '❌ Invalid days! Use a positive number (e.g., 7)');
+          return;
+        }
+        SCANNER_CONFIG.MAX_AGE_DAYS = days;
+        bot.sendMessage(chatId, `✅ Max Age set to ${days} day${days !== 1 ? 's' : ''}`);
+      } else if (setting === 'tiktok') {
+        const enabled = value.toLowerCase() === 'yes' || value.toLowerCase() === 'true' || value === '1';
+        SCANNER_CONFIG.REQUIRE_TIKTOK = enabled;
+        bot.sendMessage(chatId, `✅ TikTok requirement ${enabled ? 'enabled' : 'disabled'}`);
+      } else if (setting === 'interval') {
+        const minutes = parseInt(value);
+        if (isNaN(minutes) || minutes < 1) {
+          bot.sendMessage(chatId, '❌ Invalid minutes! Use a positive number (e.g., 5)');
+          return;
+        }
+        SCANNER_CONFIG.SCAN_INTERVAL = minutes * 60 * 1000;
+        bot.sendMessage(chatId,
+          `✅ Scan interval set to ${minutes} minute${minutes !== 1 ? 's' : ''}\n\n` +
+          `⚠️ Restart the scanner (\`/autoscan stop\` then \`/autoscan start\`) for this to take effect.`,
+          { parse_mode: 'Markdown' }
+        );
+      } else {
+        bot.sendMessage(chatId,
+          `❌ Unknown setting: ${setting}\n\n` +
+          `Valid settings: mc, volume, minage, maxage, tiktok, interval\n` +
+          `Use \`/autoscan config\` for help.`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+    } catch (error) {
+      bot.sendMessage(chatId, `❌ Error updating config: ${error.message}`);
+    }
   } else {
     bot.sendMessage(chatId,
       `❌ Invalid command!\n\n` +
       `Usage:\n` +
       `• \`/autoscan start\` - Start auto-posting\n` +
       `• \`/autoscan stop\` - Stop auto-posting\n` +
-      `• \`/autoscan status\` - Check status`,
+      `• \`/autoscan status\` - Check status\n` +
+      `• \`/autoscan config\` - Configure settings`,
       { parse_mode: 'Markdown' }
     );
   }
