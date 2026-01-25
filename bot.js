@@ -3,6 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
+const cheerio = require('cheerio');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -45,6 +46,79 @@ async function saveUserMemecoins(userId, memecoins) {
   await saveMemecoins(allData);
 }
 
+// Scrape token data from Solscan website
+async function scrapeSolscanData(contractAddress) {
+  try {
+    console.log(`Scraping Solscan for ${contractAddress}...`);
+    const response = await axios.get(`https://solscan.io/token/${contractAddress}`, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Referer': 'https://solscan.io/'
+      }
+    });
+
+    const $ = cheerio.load(response.data);
+
+    // Extract data from the page
+    const name = $('h1').first().text().trim() || 'Unknown';
+    const symbol = $('span.badge').first().text().trim() || 'Unknown';
+
+    // Try to find market cap, price, holders from the page
+    let marketCap = null;
+    let price = null;
+    let holders = null;
+    let age = null;
+
+    // Look for data in various elements (Solscan's HTML structure)
+    $('div.card').each((i, elem) => {
+      const text = $(elem).text();
+
+      if (text.includes('Market Cap')) {
+        const mcText = $(elem).find('div').last().text();
+        const mcMatch = mcText.match(/\$?[\d,\.]+/);
+        if (mcMatch) {
+          marketCap = parseFloat(mcMatch[0].replace(/[$,]/g, ''));
+        }
+      }
+
+      if (text.includes('Price')) {
+        const priceText = $(elem).find('div').last().text();
+        const priceMatch = priceText.match(/\$?[\d,\.]+/);
+        if (priceMatch) {
+          price = parseFloat(priceMatch[0].replace(/[$,]/g, ''));
+        }
+      }
+
+      if (text.includes('Holder')) {
+        const holderText = $(elem).find('div').last().text();
+        const holderMatch = holderText.match(/[\d,]+/);
+        if (holderMatch) {
+          holders = parseInt(holderMatch[0].replace(/,/g, ''));
+        }
+      }
+    });
+
+    if (name !== 'Unknown') {
+      return {
+        name,
+        symbol,
+        market_cap: marketCap,
+        price,
+        holder: holders,
+        created_time: null // Can't easily scrape this
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.log('Solscan scrape failed:', error.message);
+    return null;
+  }
+}
+
 // Fetch token data from Solscan v2 API
 async function fetchSolscanV2Data(contractAddress) {
   try {
@@ -82,7 +156,16 @@ async function fetchDexScreenerData(contractAddress) {
 
 // Get token data with fallback
 async function getTokenData(contractAddress) {
-  // Try Solscan first
+  // Try scraping Solscan first
+  console.log('Trying Solscan scraping...');
+  let scrapedData = await scrapeSolscanData(contractAddress);
+
+  if (scrapedData) {
+    return { source: 'solscan-scraped', data: scrapedData };
+  }
+
+  // Try Solscan API
+  console.log('Trying Solscan API...');
   let solscanData = await fetchSolscanV2Data(contractAddress);
 
   if (solscanData) {
@@ -130,7 +213,7 @@ function formatTokenData(result, contractAddress) {
 
   let name, symbol, marketCap, holders, age, price;
 
-  if (source === 'solscan') {
+  if (source === 'solscan' || source === 'solscan-scraped') {
     name = data.name || 'Unknown';
     symbol = data.symbol || 'Unknown';
     marketCap = data.market_cap;
@@ -174,7 +257,9 @@ function formatTokenData(result, contractAddress) {
   message += `\n🔗 [Solscan](https://solscan.io/token/${contractAddress}) • [DexScreener](https://dexscreener.com/solana/${contractAddress})`;
 
   if (source === 'dexscreener') {
-    message += `\n\n⚠️ _Data from DexScreener (Solscan unavailable)_`;
+    message += `\n\n⚠️ _Data from DexScreener_`;
+  } else if (source === 'solscan-scraped') {
+    message += `\n\n✅ _Data scraped from Solscan_`;
   }
 
   return message;
