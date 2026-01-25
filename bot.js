@@ -505,19 +505,31 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
       return;
     }
 
+    // Create inline keyboard with Bloom button
+    const inlineKeyboard = {
+      inline_keyboard: [[
+        {
+          text: '🌸 Trade on Bloom',
+          url: `https://t.me/BloomSolana_bot?start=ref_cardboardg_${contractAddress}`
+        }
+      ]]
+    };
+
     // Post to channel
     try {
       if (formatted.imageUrl) {
         // Send with image
         await bot.sendPhoto(channelId, formatted.imageUrl, {
           caption: formatted.message,
-          parse_mode: 'Markdown'
+          parse_mode: 'Markdown',
+          reply_markup: inlineKeyboard
         });
       } else {
         // Send text only
         await bot.sendMessage(channelId, formatted.message, {
           parse_mode: 'Markdown',
-          disable_web_page_preview: false
+          disable_web_page_preview: false,
+          reply_markup: inlineKeyboard
         });
       }
 
@@ -603,17 +615,29 @@ bot.on('message', async (msg) => {
         const formatted = formatTokenData(tokenData, ca);
 
         if (formatted && formatted.message) {
+          // Create inline keyboard with Bloom button
+          const inlineKeyboard = {
+            inline_keyboard: [[
+              {
+                text: '🌸 Trade on Bloom',
+                url: `https://t.me/BloomSolana_bot?start=ref_cardboardg_${ca}`
+              }
+            ]]
+          };
+
           // Post to channel
           try {
             if (formatted.imageUrl) {
               await bot.sendPhoto(channelId, formatted.imageUrl, {
                 caption: formatted.message,
-                parse_mode: 'Markdown'
+                parse_mode: 'Markdown',
+                reply_markup: inlineKeyboard
               });
             } else {
               await bot.sendMessage(channelId, formatted.message, {
                 parse_mode: 'Markdown',
-                disable_web_page_preview: false
+                disable_web_page_preview: false,
+                reply_markup: inlineKeyboard
               });
             }
             successCount++;
