@@ -155,30 +155,40 @@ async function fetchDexScreenerData(contractAddress) {
   }
 }
 
-// Get token data with fallback
+// Get token data with fallback and combine sources
 async function getTokenData(contractAddress) {
-  // Try scraping Solscan first
+  // Try DexScreener first (best for images and socials)
+  console.log('Trying DexScreener...');
+  let dexData = await fetchDexScreenerData(contractAddress);
+
+  // Also try Solscan for age/holders data
+  console.log('Trying Solscan API for age/holders...');
+  let solscanData = await fetchSolscanV2Data(contractAddress);
+
+  // If we have DexScreener data, combine it with Solscan age/holders
+  if (dexData) {
+    if (solscanData) {
+      // Combine DexScreener with Solscan data
+      return {
+        source: 'dexscreener',
+        data: dexData,
+        solscanData: solscanData // Extra data for age/holders
+      };
+    }
+    return { source: 'dexscreener', data: dexData };
+  }
+
+  // If DexScreener failed, try Solscan API
+  if (solscanData) {
+    return { source: 'solscan', data: solscanData };
+  }
+
+  // Last resort: try scraping Solscan
   console.log('Trying Solscan scraping...');
   let scrapedData = await scrapeSolscanData(contractAddress);
 
   if (scrapedData) {
     return { source: 'solscan-scraped', data: scrapedData };
-  }
-
-  // Try Solscan API
-  console.log('Trying Solscan API...');
-  let solscanData = await fetchSolscanV2Data(contractAddress);
-
-  if (solscanData) {
-    return { source: 'solscan', data: solscanData };
-  }
-
-  // Fallback to DexScreener
-  console.log('Trying DexScreener fallback...');
-  let dexData = await fetchDexScreenerData(contractAddress);
-
-  if (dexData) {
-    return { source: 'dexscreener', data: dexData };
   }
 
   return null;
@@ -211,6 +221,7 @@ function formatTokenData(result, contractAddress) {
 
   const source = result.source;
   const data = result.data;
+  const solscanData = result.solscanData; // Additional Solscan data if available
 
   let name, symbol, marketCap, holders, age, price, imageUrl, socials;
 
@@ -228,8 +239,15 @@ function formatTokenData(result, contractAddress) {
     symbol = data.baseToken?.symbol || 'Unknown';
     marketCap = data.marketCap || data.fdv;
     price = data.priceUsd;
-    holders = null;
-    age = null;
+
+    // Get holders and age from Solscan if available
+    if (solscanData) {
+      holders = solscanData.holder;
+      age = calculateTokenAge(solscanData.created_time);
+    } else {
+      holders = null;
+      age = null;
+    }
 
     // Extract image from DexScreener
     imageUrl = data.info?.imageUrl || null;
