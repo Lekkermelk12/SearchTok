@@ -16,6 +16,21 @@ if (!token) {
 const bot = new TelegramBot(token, { polling: true });
 const DATA_FILE = path.join(__dirname, 'memecoins.json');
 const TOKENS_FILE = path.join(__dirname, 'tracked_tokens.json');
+const POSTED_TOKENS_FILE = path.join(__dirname, 'posted_tokens.json');
+
+// Auto-scanner configuration
+const SCANNER_CONFIG = {
+  MIN_MARKET_CAP: 50000,      // $50K minimum
+  MIN_VOLUME_24H: 10000,      // $10K 24h volume minimum
+  MIN_AGE_HOURS: 1,           // At least 1 hour old
+  MAX_AGE_DAYS: 7,            // Max 7 days old
+  SCAN_INTERVAL: 5 * 60 * 1000, // Check every 5 minutes
+  REQUIRE_TIKTOK: true        // Must have TikTok link
+};
+
+// Auto-scanner state
+let scannerInterval = null;
+let scannerRunning = false;
 
 // Load memecoins data from file
 async function loadMemecoins() {
@@ -90,6 +105,39 @@ async function addToTrackedTokens(contractAddress, tokenData) {
 
   await saveTrackedTokens(tokens);
   console.log(`✅ Added to tracked tokens: ${tokenData.name}`);
+}
+
+// Load posted tokens (to prevent duplicates)
+async function loadPostedTokens() {
+  try {
+    const data = await fs.readFile(POSTED_TOKENS_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+}
+
+// Save posted tokens
+async function savePostedTokens(tokens) {
+  await fs.writeFile(POSTED_TOKENS_FILE, JSON.stringify(tokens, null, 2));
+}
+
+// Check if token was already posted
+async function isTokenPosted(contractAddress) {
+  const posted = await loadPostedTokens();
+  return posted.includes(contractAddress);
+}
+
+// Mark token as posted
+async function markTokenAsPosted(contractAddress) {
+  const posted = await loadPostedTokens();
+  if (!posted.includes(contractAddress)) {
+    posted.push(contractAddress);
+    await savePostedTokens(posted);
+  }
 }
 
 // Scrape token data from Solscan website
@@ -471,6 +519,250 @@ function formatTokenData(result, contractAddress) {
   return { message, imageUrl, socials, name, symbol, marketCap, price, holders };
 }
 
+// ============= AUTO-SCANNER FUNCTIONS =============
+
+// Scan DexScreener for recent pump.fun tokens
+async function scanPumpFunTokens() {
+  try {
+    console.log('🔍 Scanning for new pump.fun tokens...');
+
+    // Fetch recent Solana pairs from DexScreener
+    const response = await axios.get('https://api.dexscreener.com/latest/dex/pairs/solana', {
+      timeout: 15000
+    });
+
+    if (!response.data || !response.data.pairs) {
+      console.log('No pairs found');
+      return [];
+    }
+
+    // Filter for pump.fun tokens only
+    const pumpFunTokens = response.data.pairs.filter(pair => {
+      const url = pair.url || '';
+      return url.includes('pump.fun') || url.includes('pump');
+    });
+
+    console.log(`Found ${pumpFunTokens.length} pump.fun tokens`);
+    return pumpFunTokens;
+  } catch (error) {
+    console.log('Error scanning pump.fun tokens:', error.message);
+    return [];
+  }
+}
+
+// Check if token meets auto-post criteria
+function meetsAutoPostCriteria(pair) {
+  // Check market cap
+  const marketCap = pair.marketCap || pair.fdv || 0;
+  if (marketCap < SCANNER_CONFIG.MIN_MARKET_CAP) {
+    return { pass: false, reason: `MC too low: $${marketCap.toFixed(0)}` };
+  }
+
+  // Check 24h volume
+  const volume24h = pair.volume?.h24 || 0;
+  if (volume24h < SCANNER_CONFIG.MIN_VOLUME_24H) {
+    return { pass: false, reason: `Volume too low: $${volume24h.toFixed(0)}` };
+  }
+
+  // Check age
+  if (pair.pairCreatedAt) {
+    const createdDate = new Date(pair.pairCreatedAt);
+    const ageMs = Date.now() - createdDate.getTime();
+    const ageHours = ageMs / (1000 * 60 * 60);
+    const ageDays = ageHours / 24;
+
+    if (ageHours < SCANNER_CONFIG.MIN_AGE_HOURS) {
+      return { pass: false, reason: `Too new: ${ageHours.toFixed(1)}h` };
+    }
+
+    if (ageDays > SCANNER_CONFIG.MAX_AGE_DAYS) {
+      return { pass: false, reason: `Too old: ${ageDays.toFixed(1)}d` };
+    }
+  }
+
+  // Check for TikTok link if required
+  if (SCANNER_CONFIG.REQUIRE_TIKTOK) {
+    let hasTikTok = false;
+
+    if (pair.info?.socials) {
+      for (const social of pair.info.socials) {
+        if (social.url && social.url.includes('tiktok.com')) {
+          hasTikTok = true;
+          break;
+        }
+      }
+    }
+
+    if (pair.info?.websites) {
+      for (const website of pair.info.websites) {
+        if (website.url && website.url.includes('tiktok.com')) {
+          hasTikTok = true;
+          break;
+        }
+      }
+    }
+
+    if (!hasTikTok) {
+      return { pass: false, reason: 'No TikTok link' };
+    }
+  }
+
+  return { pass: true };
+}
+
+// Auto-post a qualifying token
+async function autoPostToken(contractAddress) {
+  try {
+    console.log(`🤖 Auto-posting token: ${contractAddress}`);
+
+    const tokenData = await getTokenData(contractAddress);
+
+    if (!tokenData) {
+      console.log('  ❌ Could not fetch token data');
+      return false;
+    }
+
+    const formatted = formatTokenData(tokenData, contractAddress);
+
+    if (!formatted || !formatted.message) {
+      console.log('  ❌ Could not format token data');
+      return false;
+    }
+
+    // Create inline keyboard with TikTok button
+    let inlineKeyboard = null;
+    if (formatted.socials?.tiktok) {
+      inlineKeyboard = {
+        inline_keyboard: [[
+          {
+            text: '🎵 TikTok',
+            url: formatted.socials.tiktok
+          }
+        ]]
+      };
+    }
+
+    // Post to channel
+    const messageOptions = {
+      parse_mode: 'Markdown'
+    };
+
+    if (inlineKeyboard) {
+      messageOptions.reply_markup = inlineKeyboard;
+    }
+
+    if (formatted.imageUrl) {
+      messageOptions.caption = formatted.message;
+      await bot.sendPhoto(channelId, formatted.imageUrl, messageOptions);
+    } else {
+      messageOptions.disable_web_page_preview = false;
+      await bot.sendMessage(channelId, formatted.message, messageOptions);
+    }
+
+    // Add to tracked tokens
+    await addToTrackedTokens(contractAddress, {
+      name: formatted.name,
+      symbol: formatted.symbol,
+      marketCap: formatted.marketCap,
+      price: formatted.price,
+      holders: formatted.holders,
+      imageUrl: formatted.imageUrl,
+      pairCreatedAt: tokenData.data?.pairCreatedAt,
+      createdTimestamp: tokenData.data?.creation_timestamp || tokenData.gmgnData?.creation_timestamp
+    });
+
+    // Mark as posted
+    await markTokenAsPosted(contractAddress);
+
+    console.log(`  ✅ Successfully auto-posted: ${formatted.name}`);
+    return true;
+  } catch (error) {
+    console.log(`  ❌ Error auto-posting token: ${error.message}`);
+    return false;
+  }
+}
+
+// Main auto-scanner loop
+async function runAutoScan() {
+  console.log('\n🤖 Running auto-scan cycle...');
+
+  try {
+    const tokens = await scanPumpFunTokens();
+    let posted = 0;
+    let checked = 0;
+
+    for (const pair of tokens) {
+      const ca = pair.baseToken?.address;
+      if (!ca) continue;
+
+      checked++;
+
+      // Skip if already posted
+      if (await isTokenPosted(ca)) {
+        continue;
+      }
+
+      // Check if meets criteria
+      const check = meetsAutoPostCriteria(pair);
+
+      if (check.pass) {
+        console.log(`  ✅ Found qualifying token: ${pair.baseToken?.symbol}`);
+        const success = await autoPostToken(ca);
+        if (success) {
+          posted++;
+          // Add delay between posts
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      } else {
+        console.log(`  ⏭️  Skipped ${pair.baseToken?.symbol}: ${check.reason}`);
+      }
+    }
+
+    console.log(`\n📊 Scan complete: Checked ${checked}, Posted ${posted}\n`);
+  } catch (error) {
+    console.log('Error in auto-scan:', error.message);
+  }
+}
+
+// Start auto-scanner
+function startAutoScanner() {
+  if (scannerRunning) {
+    return false;
+  }
+
+  console.log('🚀 Starting auto-scanner...');
+  console.log(`📊 Settings: MC $${SCANNER_CONFIG.MIN_MARKET_CAP}+, Vol $${SCANNER_CONFIG.MIN_VOLUME_24H}+, Age ${SCANNER_CONFIG.MIN_AGE_HOURS}h-${SCANNER_CONFIG.MAX_AGE_DAYS}d`);
+
+  scannerRunning = true;
+
+  // Run first scan immediately
+  runAutoScan();
+
+  // Then run every SCAN_INTERVAL
+  scannerInterval = setInterval(runAutoScan, SCANNER_CONFIG.SCAN_INTERVAL);
+
+  return true;
+}
+
+// Stop auto-scanner
+function stopAutoScanner() {
+  if (!scannerRunning) {
+    return false;
+  }
+
+  console.log('⏹️  Stopping auto-scanner...');
+
+  if (scannerInterval) {
+    clearInterval(scannerInterval);
+    scannerInterval = null;
+  }
+
+  scannerRunning = false;
+  return true;
+}
+
+// ============= BOT COMMANDS =============
+
 // /start command
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
@@ -484,6 +776,10 @@ Track your favorite TikTok Solana memecoins with these commands:
 
 /bulkpost - Process multiple tokens at once
   (Then send CAs, one per line)
+
+/autoscan start - Auto-post pump.fun tokens with TikTok links
+/autoscan stop - Turn off auto-posting
+/autoscan status - Check scanner status
 
 /add <symbol> <CA> - Add a memecoin to your tracker
 /list - Show your tracked memecoins
@@ -515,6 +811,14 @@ bot.onText(/\/help/, (msg) => {
   2. Paste contract addresses (one per line)
   3. Get data for all tokens
 
+*Auto-Scanner (pump.fun):*
+/autoscan start - Auto-post qualifying tokens
+/autoscan stop - Turn off auto-posting
+/autoscan status - Check scanner status
+  • Scans pump.fun launches every 5 minutes
+  • Posts tokens with TikTok links
+  • Filters by MC, volume, and age
+
 *Tracker Commands:*
 /add <symbol> <CA> - Add to your tracker
 /list - Show tracked memecoins
@@ -523,7 +827,7 @@ bot.onText(/\/help/, (msg) => {
 *Debug:*
 /chatid - Get current chat ID
 
-💡 *Tip:* Use bulk mode for posting 100 coins per day!
+💡 *Tip:* Use auto-scanner to find TikTok memes automatically!
   `;
   bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 });
@@ -544,6 +848,61 @@ bot.onText(/\/chatid/, (msg) => {
     `Use this Chat ID in your .env file if username doesn't work!`,
     { parse_mode: 'Markdown' }
   );
+});
+
+// /autoscan command - Control auto-scanner
+bot.onText(/\/autoscan (.+)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  const action = match[1].trim().toLowerCase();
+
+  if (action === 'start') {
+    const started = startAutoScanner();
+    if (started) {
+      bot.sendMessage(chatId,
+        `🤖 *Auto-Scanner Started!*\n\n` +
+        `📊 *Settings:*\n` +
+        `• Min Market Cap: $${SCANNER_CONFIG.MIN_MARKET_CAP.toLocaleString()}\n` +
+        `• Min 24h Volume: $${SCANNER_CONFIG.MIN_VOLUME_24H.toLocaleString()}\n` +
+        `• Age Range: ${SCANNER_CONFIG.MIN_AGE_HOURS}h - ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
+        `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
+        `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n\n` +
+        `🔍 Scanning for pump.fun tokens with TikTok links...\n\n` +
+        `Use \`/autoscan stop\` to turn off.`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      bot.sendMessage(chatId, '⚠️ Auto-scanner is already running!');
+    }
+  } else if (action === 'stop') {
+    const stopped = stopAutoScanner();
+    if (stopped) {
+      bot.sendMessage(chatId, '⏹️ *Auto-Scanner Stopped!*', { parse_mode: 'Markdown' });
+    } else {
+      bot.sendMessage(chatId, '⚠️ Auto-scanner is not running!');
+    }
+  } else if (action === 'status') {
+    bot.sendMessage(chatId,
+      `📊 *Auto-Scanner Status*\n\n` +
+      `Status: ${scannerRunning ? '🟢 Running' : '🔴 Stopped'}\n\n` +
+      `*Settings:*\n` +
+      `• Min Market Cap: $${SCANNER_CONFIG.MIN_MARKET_CAP.toLocaleString()}\n` +
+      `• Min 24h Volume: $${SCANNER_CONFIG.MIN_VOLUME_24H.toLocaleString()}\n` +
+      `• Age Range: ${SCANNER_CONFIG.MIN_AGE_HOURS}h - ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
+      `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
+      `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n\n` +
+      `Commands: \`/autoscan start\` | \`/autoscan stop\``,
+      { parse_mode: 'Markdown' }
+    );
+  } else {
+    bot.sendMessage(chatId,
+      `❌ Invalid command!\n\n` +
+      `Usage:\n` +
+      `• \`/autoscan start\` - Start auto-posting\n` +
+      `• \`/autoscan stop\` - Stop auto-posting\n` +
+      `• \`/autoscan status\` - Check status`,
+      { parse_mode: 'Markdown' }
+    );
+  }
 });
 
 // /add command
