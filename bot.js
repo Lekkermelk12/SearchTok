@@ -130,6 +130,7 @@ async function fetchSolscanV2Data(contractAddress) {
     });
 
     if (response.data) {
+      console.log('📊 Solscan response:', JSON.stringify(response.data, null, 2));
       return response.data;
     }
     return null;
@@ -147,7 +148,9 @@ async function fetchDexScreenerData(contractAddress) {
     });
 
     if (response.data && response.data.pairs && response.data.pairs.length > 0) {
-      return response.data.pairs[0];
+      const pair = response.data.pairs[0];
+      console.log('📊 DexScreener socials:', JSON.stringify(pair.info?.socials, null, 2));
+      return pair;
     }
     return null;
   } catch (error) {
