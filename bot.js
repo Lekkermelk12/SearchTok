@@ -6,7 +6,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-const channelId = process.env.CHANNEL_ID || '@nichedmemes';
+const channelId = process.env.CHANNEL_ID || '-1003864629972';
 
 if (!token) {
   console.error('Error: TELEGRAM_BOT_TOKEN is not set in .env file');
