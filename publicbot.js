@@ -48,7 +48,7 @@ async function fetchDexScreenerData(contractAddress) {
     }
     return null;
   } catch (error) {
-    console.log('DexScreener fetch failed:', error.message);
+    console.log(`DexScreener fetch failed for ${contractAddress}:`, error.message);
     return null;
   }
 }
@@ -69,7 +69,7 @@ async function fetchGmgnData(contractAddress) {
     }
     return null;
   } catch (error) {
-    console.log('gmgn.ai fetch failed:', error.message);
+    console.log(`gmgn.ai fetch failed for ${contractAddress}:`, error.message);
     return null;
   }
 }
@@ -131,6 +131,57 @@ function formatAge(tokenData) {
   }
 }
 
+// Scan channel history for tokens
+async function scanChannelHistory() {
+  console.log('📡 Scanning channel history for tokens...');
+
+  try {
+    let tokens = await loadTrackedTokens();
+    let offset = 0;
+    let foundNew = 0;
+
+    // Get last 100 messages from channel
+    for (let i = 0; i < 5; i++) {
+      try {
+        const updates = await bot.getUpdates({ offset, limit: 100, timeout: 10 });
+
+        if (updates.length === 0) break;
+
+        for (const update of updates) {
+          if (update.channel_post && update.channel_post.chat.id.toString() === channelId) {
+            const text = update.channel_post.text || update.channel_post.caption || '';
+            const contractAddress = extractContractAddress(text);
+
+            if (contractAddress && !tokens.find(t => t.contractAddress === contractAddress)) {
+              console.log(`  Found token: ${contractAddress}`);
+              const tokenData = await getTokenData(contractAddress);
+              if (tokenData) {
+                tokens.push(tokenData);
+                foundNew++;
+              }
+              // Small delay to avoid rate limiting
+              await new Promise(resolve => setTimeout(resolve, 300));
+            }
+          }
+          offset = update.update_id + 1;
+        }
+      } catch (error) {
+        console.log('Error scanning history:', error.message);
+        break;
+      }
+    }
+
+    if (foundNew > 0) {
+      await saveTrackedTokens(tokens);
+      console.log(`✅ Found and tracked ${foundNew} new tokens from channel history`);
+    } else {
+      console.log(`ℹ️  No new tokens found in channel history`);
+    }
+  } catch (error) {
+    console.log('Error in scanChannelHistory:', error.message);
+  }
+}
+
 // Monitor channel for new token posts
 bot.on('channel_post', async (msg) => {
   if (msg.chat.id.toString() !== channelId) return;
@@ -189,6 +240,7 @@ bot.onText(/\/help/, (msg) => {
   • Choose top 10, 50, 100, or 250
   • Sort by Market Cap (high→low or low→high)
   • Sort by Age (newest→oldest or oldest→newest)
+  • Click "Show Results" button to display
 
 *Filtering:*
 /filter <mc_range> <age_range>
@@ -219,24 +271,28 @@ bot.onText(/\/rank/, (msg) => {
         { text: '🎯 Top 250', callback_data: 'rank_250' }
       ],
       [
-        { text: '📊 Sort by Market Cap ⬇️', callback_data: 'sort_mc_desc' }
+        { text: '📊 Market Cap ⬇️ (High→Low)', callback_data: 'sort_mc_desc' }
       ],
       [
-        { text: '📊 Sort by Market Cap ⬆️', callback_data: 'sort_mc_asc' }
+        { text: '📊 Market Cap ⬆️ (Low→High)', callback_data: 'sort_mc_asc' }
       ],
       [
-        { text: '⏰ Sort by Age (Newest)', callback_data: 'sort_age_desc' }
+        { text: '⏰ Age (Newest→Oldest)', callback_data: 'sort_age_desc' }
       ],
       [
-        { text: '⏰ Sort by Age (Oldest)', callback_data: 'sort_age_asc' }
+        { text: '⏰ Age (Oldest→Newest)', callback_data: 'sort_age_asc' }
+      ],
+      [
+        { text: '✅ Show Results', callback_data: 'show_results' }
       ]
     ]
   };
 
   bot.sendMessage(chatId,
     '📊 *Select Ranking Options:*\n\n' +
-    '1️⃣ Choose number of coins to display\n' +
-    '2️⃣ Choose how to sort them',
+    '1️⃣ Choose number of coins (default: Top 10)\n' +
+    '2️⃣ Choose sorting method (default: MC High→Low)\n' +
+    '3️⃣ Click "Show Results" to display',
     {
       parse_mode: 'Markdown',
       reply_markup: keyboard
@@ -260,6 +316,13 @@ bot.on('callback_query', async (query) => {
 
   const prefs = userPreferences.get(userId);
 
+  // Handle "Show Results" button
+  if (data === 'show_results') {
+    await bot.answerCallbackQuery(query.id, { text: 'Loading results...' });
+    await showRankings(chatId, query.message.message_id, prefs);
+    return;
+  }
+
   // Update preferences based on callback
   if (data.startsWith('rank_')) {
     prefs.limit = parseInt(data.split('_')[1]);
@@ -278,29 +341,61 @@ bot.on('callback_query', async (query) => {
 
   userPreferences.set(userId, prefs);
 
-  // Show current selection
+  // Update the message with current settings
   const currentSettings =
     `✅ *Current Selection:*\n\n` +
     `📊 Showing: Top ${prefs.limit}\n` +
     `🔄 Sort by: ${prefs.sortBy === 'mc' ? 'Market Cap' : 'Age'}\n` +
     `⬆️⬇️ Order: ${prefs.sortOrder === 'desc' ? (prefs.sortBy === 'mc' ? 'High→Low' : 'Newest→Oldest') : (prefs.sortBy === 'mc' ? 'Low→High' : 'Oldest→Newest')}\n\n` +
-    `Type /show to display results!`;
+    `Click "✅ Show Results" to display!`;
 
-  bot.editMessageText(currentSettings, {
-    chat_id: chatId,
-    message_id: query.message.message_id,
-    parse_mode: 'Markdown'
-  });
+  // Keep the keyboard
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '🔟 Top 10', callback_data: 'rank_10' },
+        { text: '5️⃣0️⃣ Top 50', callback_data: 'rank_50' }
+      ],
+      [
+        { text: '💯 Top 100', callback_data: 'rank_100' },
+        { text: '🎯 Top 250', callback_data: 'rank_250' }
+      ],
+      [
+        { text: '📊 Market Cap ⬇️ (High→Low)', callback_data: 'sort_mc_desc' }
+      ],
+      [
+        { text: '📊 Market Cap ⬆️ (Low→High)', callback_data: 'sort_mc_asc' }
+      ],
+      [
+        { text: '⏰ Age (Newest→Oldest)', callback_data: 'sort_age_desc' }
+      ],
+      [
+        { text: '⏰ Age (Oldest→Newest)', callback_data: 'sort_age_asc' }
+      ],
+      [
+        { text: '✅ Show Results', callback_data: 'show_results' }
+      ]
+    ]
+  };
+
+  try {
+    await bot.editMessageText(currentSettings, {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
+    });
+  } catch (error) {
+    // Ignore if message is not modified
+    if (!error.message.includes('message is not modified')) {
+      console.log('Error updating message:', error.message);
+    }
+  }
 });
 
-// /show command - Display ranked results
-bot.onText(/\/show/, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  const prefs = userPreferences.get(userId) || { limit: 10, sortBy: 'mc', sortOrder: 'desc' };
-
-  const loadingMsg = await bot.sendMessage(chatId, '⏳ Fetching latest data...');
+// Show rankings function
+async function showRankings(chatId, originalMessageId, prefs) {
+  const loadingMsg = await bot.sendMessage(chatId, '⏳ Fetching latest data from APIs...');
 
   try {
     // Load and refresh token data
@@ -308,27 +403,26 @@ bot.onText(/\/show/, async (msg) => {
 
     if (tokens.length === 0) {
       await bot.editMessageText(
-        '❌ No tokens tracked yet. Tokens are automatically added when posted to the channel.',
+        '❌ No tokens tracked yet. Tokens are automatically added when posted to the channel.\n\nTry posting some tokens first!',
         { chat_id: chatId, message_id: loadingMsg.message_id }
       );
       return;
     }
 
-    // Refresh data for all tokens (or just use cached if recent)
-    const needsRefresh = tokens.filter(t => !t.lastUpdated || (Date.now() - t.lastUpdated > 300000)); // 5 min cache
+    console.log(`Refreshing data for ${tokens.length} tokens...`);
 
-    if (needsRefresh.length > 0) {
-      console.log(`Refreshing data for ${needsRefresh.length} tokens...`);
-      for (const token of needsRefresh) {
-        const fresh = await getTokenData(token.contractAddress);
-        if (fresh) {
-          Object.assign(token, fresh);
-        }
-        // Small delay to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 200));
+    // Refresh ALL tokens with fresh data
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      console.log(`  [${i+1}/${tokens.length}] Fetching ${token.contractAddress}...`);
+      const fresh = await getTokenData(token.contractAddress);
+      if (fresh) {
+        Object.assign(token, fresh);
       }
-      await saveTrackedTokens(tokens);
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
+    await saveTrackedTokens(tokens);
 
     // Filter out tokens without required data
     tokens = tokens.filter(t => {
@@ -338,6 +432,8 @@ bot.onText(/\/show/, async (msg) => {
         return getAgeInDays(t) !== null;
       }
     });
+
+    console.log(`Filtered to ${tokens.length} tokens with valid data`);
 
     // Sort tokens
     tokens.sort((a, b) => {
@@ -363,7 +459,8 @@ bot.onText(/\/show/, async (msg) => {
       : `Age (${prefs.sortOrder === 'desc' ? 'Newest→Oldest' : 'Oldest→Newest'})`;
 
     let message = `🏆 *Top ${topTokens.length} TikTok Memes*\n`;
-    message += `📊 Sorted by: ${sortLabel}\n\n`;
+    message += `📊 Sorted by: ${sortLabel}\n`;
+    message += `📈 Total tracked: ${tokens.length} tokens\n\n`;
 
     topTokens.forEach((token, index) => {
       const rank = index + 1;
@@ -380,7 +477,7 @@ bot.onText(/\/show/, async (msg) => {
       message += `   📝 \`${token.contractAddress}\`\n\n`;
     });
 
-    message += `\n🔗 [View on DexScreener](https://dexscreener.com/solana/${topTokens[0]?.contractAddress || ''})`;
+    message += `\n_Use /rank to change sorting or /filter to filter results_`;
 
     await bot.editMessageText(message, {
       chat_id: chatId,
@@ -392,11 +489,11 @@ bot.onText(/\/show/, async (msg) => {
   } catch (error) {
     console.error('Error showing rankings:', error);
     await bot.editMessageText(
-      '❌ Error fetching rankings. Please try again later.',
+      '❌ Error fetching rankings. Please try again later.\n\n' + error.message,
       { chat_id: chatId, message_id: loadingMsg.message_id }
-    );
+    ).catch(err => console.log('Error editing error message'));
   }
-});
+}
 
 // Parse size string (e.g., "100k", "5m", "1.5m")
 function parseSize(str) {
@@ -552,4 +649,13 @@ bot.onText(/\/filter (.+)/, async (msg, match) => {
   }
 });
 
-console.log('🤖 Niche TikTok Memes Bot (@nichedbot) is running...');
+// Initialize bot on startup
+(async () => {
+  console.log('🤖 Niche TikTok Memes Bot (@nichedbot) is running...');
+  console.log('📡 Initializing: Scanning channel for tokens...');
+
+  // Scan channel history on startup
+  await scanChannelHistory();
+
+  console.log('✅ Bot ready! Users can now use /rank and /filter commands.');
+})();
