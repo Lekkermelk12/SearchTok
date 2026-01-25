@@ -475,9 +475,30 @@ bot.onText(/\/help/, (msg) => {
 /list - Show tracked memecoins
 /remove <symbol> - Remove from tracker
 
+*Debug:*
+/chatid - Get current chat ID
+
 💡 *Tip:* Use bulk mode for posting 100 coins per day!
   `;
   bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
+});
+
+// /chatid command - Get chat ID for debugging
+bot.onText(/\/chatid/, (msg) => {
+  const chatId = msg.chat.id;
+  const chatType = msg.chat.type;
+  const chatTitle = msg.chat.title || 'N/A';
+  const chatUsername = msg.chat.username || 'N/A';
+
+  bot.sendMessage(chatId,
+    `📋 *Chat Information:*\n\n` +
+    `*Chat ID:* \`${chatId}\`\n` +
+    `*Type:* ${chatType}\n` +
+    `*Title:* ${chatTitle}\n` +
+    `*Username:* @${chatUsername}\n\n` +
+    `Use this Chat ID in your .env file if username doesn't work!`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
 // /add command
