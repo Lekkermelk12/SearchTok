@@ -149,8 +149,11 @@ async function fetchDexScreenerData(contractAddress) {
 
     if (response.data && response.data.pairs && response.data.pairs.length > 0) {
       const pair = response.data.pairs[0];
-      console.log('📊 DexScreener data - pairCreatedAt:', pair.pairCreatedAt, 'txns:', pair.txns);
-      console.log('📊 DexScreener socials:', JSON.stringify(pair.info?.socials, null, 2));
+      // Log all available fields to find holder count
+      console.log('📊 Available DexScreener fields:', Object.keys(pair));
+      if (pair.info) {
+        console.log('📊 Info fields:', Object.keys(pair.info));
+      }
       return pair;
     }
     return null;
