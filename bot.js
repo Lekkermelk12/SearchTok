@@ -241,6 +241,7 @@ function formatTokenData(result, contractAddress) {
         if (social.type === 'twitter') socials.twitter = social.url;
         if (social.type === 'telegram') socials.telegram = social.url;
         if (social.type === 'website') socials.website = social.url;
+        if (social.type === 'tiktok') socials.tiktok = social.url;
       });
     }
     if (data.info?.websites && data.info.websites.length > 0 && !socials.website) {
@@ -278,6 +279,7 @@ function formatTokenData(result, contractAddress) {
   if (socials?.website) socialLinks.push(`[Website](${socials.website})`);
   if (socials?.twitter) socialLinks.push(`[Twitter](${socials.twitter})`);
   if (socials?.telegram) socialLinks.push(`[Telegram](${socials.telegram})`);
+  if (socials?.tiktok) socialLinks.push(`[TikTok](${socials.tiktok})`);
 
   if (socialLinks.length > 0) {
     message += `\n🔗 ${socialLinks.join(' • ')}\n`;
