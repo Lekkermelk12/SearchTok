@@ -6,6 +6,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
+const channelId = process.env.CHANNEL_ID || '@nichedmemes';
 
 if (!token) {
   console.error('Error: TELEGRAM_BOT_TOKEN is not set in .env file');
@@ -211,7 +212,7 @@ function formatTokenData(result, contractAddress) {
   const source = result.source;
   const data = result.data;
 
-  let name, symbol, marketCap, holders, age, price;
+  let name, symbol, marketCap, holders, age, price, imageUrl, socials;
 
   if (source === 'solscan' || source === 'solscan-scraped') {
     name = data.name || 'Unknown';
@@ -220,14 +221,31 @@ function formatTokenData(result, contractAddress) {
     holders = data.holder;
     age = calculateTokenAge(data.created_time);
     price = data.price;
+    imageUrl = null;
+    socials = {};
   } else if (source === 'dexscreener') {
     name = data.baseToken?.name || 'Unknown';
     symbol = data.baseToken?.symbol || 'Unknown';
     marketCap = data.marketCap || data.fdv;
     price = data.priceUsd;
-    // DexScreener doesn't have holders or created_time
     holders = null;
     age = null;
+
+    // Extract image from DexScreener
+    imageUrl = data.info?.imageUrl || null;
+
+    // Extract socials from DexScreener
+    socials = {};
+    if (data.info?.socials) {
+      data.info.socials.forEach(social => {
+        if (social.type === 'twitter') socials.twitter = social.url;
+        if (social.type === 'telegram') socials.telegram = social.url;
+        if (social.type === 'website') socials.website = social.url;
+      });
+    }
+    if (data.info?.websites && data.info.websites.length > 0 && !socials.website) {
+      socials.website = data.info.websites[0].url;
+    }
   }
 
   let message = `🪙 *${name}* ($${symbol})\n\n`;
@@ -254,15 +272,20 @@ function formatTokenData(result, contractAddress) {
   }
 
   message += `\n📝 *CA:* \`${contractAddress}\`\n`;
-  message += `\n🔗 [Solscan](https://solscan.io/token/${contractAddress}) • [DexScreener](https://dexscreener.com/solana/${contractAddress})`;
 
-  if (source === 'dexscreener') {
-    message += `\n\n⚠️ _Data from DexScreener_`;
-  } else if (source === 'solscan-scraped') {
-    message += `\n\n✅ _Data scraped from Solscan_`;
+  // Add socials if they exist
+  const socialLinks = [];
+  if (socials?.website) socialLinks.push(`[Website](${socials.website})`);
+  if (socials?.twitter) socialLinks.push(`[Twitter](${socials.twitter})`);
+  if (socials?.telegram) socialLinks.push(`[Telegram](${socials.telegram})`);
+
+  if (socialLinks.length > 0) {
+    message += `\n🔗 ${socialLinks.join(' • ')}\n`;
   }
 
-  return message;
+  message += `\n📊 [Solscan](https://solscan.io/token/${contractAddress}) • [DexScreener](https://dexscreener.com/solana/${contractAddress})`;
+
+  return { message, imageUrl };
 }
 
 // /start command
@@ -427,12 +450,12 @@ bot.onText(/\/remove (.+)/, async (msg, match) => {
   }
 });
 
-// /post command - Fetch and display token data
+// /post command - Fetch and post token data to channel
 bot.onText(/\/post (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const contractAddress = match[1].trim();
 
-  // Send initial message
+  // Send initial message to user
   const loadingMsg = await bot.sendMessage(chatId, '🔍 Fetching token data...');
 
   try {
@@ -448,9 +471,9 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
       return;
     }
 
-    const message = formatTokenData(tokenData, contractAddress);
+    const formatted = formatTokenData(tokenData, contractAddress);
 
-    if (!message) {
+    if (!formatted || !formatted.message) {
       await bot.editMessageText(
         `❌ Error formatting token data.`,
         { chat_id: chatId, message_id: loadingMsg.message_id }
@@ -458,13 +481,39 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
       return;
     }
 
-    // Send the formatted message
-    await bot.editMessageText(message, {
-      chat_id: chatId,
-      message_id: loadingMsg.message_id,
-      parse_mode: 'Markdown',
-      disable_web_page_preview: false
-    });
+    // Post to channel
+    try {
+      if (formatted.imageUrl) {
+        // Send with image
+        await bot.sendPhoto(channelId, formatted.imageUrl, {
+          caption: formatted.message,
+          parse_mode: 'Markdown'
+        });
+      } else {
+        // Send text only
+        await bot.sendMessage(channelId, formatted.message, {
+          parse_mode: 'Markdown',
+          disable_web_page_preview: false
+        });
+      }
+
+      // Notify user of success
+      await bot.editMessageText(
+        `✅ Posted to channel!\n\n${formatted.message}`,
+        {
+          chat_id: chatId,
+          message_id: loadingMsg.message_id,
+          parse_mode: 'Markdown',
+          disable_web_page_preview: false
+        }
+      );
+    } catch (channelError) {
+      console.error('Error posting to channel:', channelError);
+      await bot.editMessageText(
+        `❌ Error posting to channel: ${channelError.message}\n\nMake sure the bot is an admin in the channel!`,
+        { chat_id: chatId, message_id: loadingMsg.message_id }
+      );
+    }
 
   } catch (error) {
     console.error('Error in /post command:', error);
@@ -527,14 +576,27 @@ bot.on('message', async (msg) => {
       const tokenData = await getTokenData(ca);
 
       if (tokenData) {
-        const message = formatTokenData(tokenData, ca);
+        const formatted = formatTokenData(tokenData, ca);
 
-        if (message) {
-          await bot.sendMessage(chatId, message, {
-            parse_mode: 'Markdown',
-            disable_web_page_preview: false
-          });
-          successCount++;
+        if (formatted && formatted.message) {
+          // Post to channel
+          try {
+            if (formatted.imageUrl) {
+              await bot.sendPhoto(channelId, formatted.imageUrl, {
+                caption: formatted.message,
+                parse_mode: 'Markdown'
+              });
+            } else {
+              await bot.sendMessage(channelId, formatted.message, {
+                parse_mode: 'Markdown',
+                disable_web_page_preview: false
+              });
+            }
+            successCount++;
+          } catch (postError) {
+            console.error(`Error posting ${ca} to channel:`, postError.message);
+            failCount++;
+          }
 
           // Add delay between requests to avoid rate limiting
           if (i < contractAddresses.length - 1) {
@@ -545,7 +607,6 @@ bot.on('message', async (msg) => {
         }
       } else {
         failCount++;
-        await bot.sendMessage(chatId, `❌ Failed to fetch data for: \`${ca}\``, { parse_mode: 'Markdown' });
       }
     } catch (error) {
       console.error(`Error processing ${ca}:`, error.message);
