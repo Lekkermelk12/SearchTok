@@ -120,20 +120,21 @@ async function scrapeSolscanData(contractAddress) {
   }
 }
 
-// Fetch token data from Solscan v2 API
+// Fetch token data from Solscan public API
 async function fetchSolscanV2Data(contractAddress) {
   try {
-    const response = await axios.get(`https://pro-api.solscan.io/v2.0/token/meta`, {
-      params: { address: contractAddress },
+    // Use public Solscan API (no auth required)
+    const response = await axios.get(`https://public-api.solscan.io/token/meta`, {
+      params: { tokenAddress: contractAddress },
       timeout: 15000
     });
 
-    if (response.data && response.data.success && response.data.data) {
-      return response.data.data;
+    if (response.data) {
+      return response.data;
     }
     return null;
   } catch (error) {
-    console.log('Solscan v2 fetch failed:', error.message);
+    console.log('Solscan API fetch failed:', error.message);
     return null;
   }
 }
