@@ -149,6 +149,7 @@ async function fetchDexScreenerData(contractAddress) {
 
     if (response.data && response.data.pairs && response.data.pairs.length > 0) {
       const pair = response.data.pairs[0];
+      console.log('📊 DexScreener data - pairCreatedAt:', pair.pairCreatedAt, 'txns:', pair.txns);
       console.log('📊 DexScreener socials:', JSON.stringify(pair.info?.socials, null, 2));
       return pair;
     }
@@ -165,29 +166,12 @@ async function getTokenData(contractAddress) {
   console.log('Trying DexScreener...');
   let dexData = await fetchDexScreenerData(contractAddress);
 
-  // Also try Solscan for age/holders data
-  console.log('Trying Solscan API for age/holders...');
-  let solscanData = await fetchSolscanV2Data(contractAddress);
-
-  // If we have DexScreener data, combine it with Solscan age/holders
+  // Return DexScreener data if available
   if (dexData) {
-    if (solscanData) {
-      // Combine DexScreener with Solscan data
-      return {
-        source: 'dexscreener',
-        data: dexData,
-        solscanData: solscanData // Extra data for age/holders
-      };
-    }
     return { source: 'dexscreener', data: dexData };
   }
 
-  // If DexScreener failed, try Solscan API
-  if (solscanData) {
-    return { source: 'solscan', data: solscanData };
-  }
-
-  // Last resort: try scraping Solscan
+  // Fallback: try scraping Solscan
   console.log('Trying Solscan scraping...');
   let scrapedData = await scrapeSolscanData(contractAddress);
 
@@ -244,14 +228,29 @@ function formatTokenData(result, contractAddress) {
     marketCap = data.marketCap || data.fdv;
     price = data.priceUsd;
 
-    // Get holders and age from Solscan if available
-    if (solscanData) {
-      holders = solscanData.holder;
-      age = calculateTokenAge(solscanData.created_time);
+    // Get age from DexScreener's pairCreatedAt (Unix timestamp in milliseconds)
+    if (data.pairCreatedAt) {
+      const createdDate = new Date(data.pairCreatedAt);
+      const now = new Date();
+      const ageMs = now - createdDate;
+
+      const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+      const ageHours = Math.floor((ageMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const ageMinutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
+
+      if (ageDays > 0) {
+        age = `${ageDays}d ${ageHours}h`;
+      } else if (ageHours > 0) {
+        age = `${ageHours}h ${ageMinutes}m`;
+      } else {
+        age = `${ageMinutes}m`;
+      }
     } else {
-      holders = null;
       age = null;
     }
+
+    // Use transaction count as a proxy metric (no free API for holder count)
+    holders = null;
 
     // Extract image from DexScreener
     imageUrl = data.info?.imageUrl || null;
@@ -306,6 +305,14 @@ function formatTokenData(result, contractAddress) {
 
   if (age) {
     message += `⏰ *Age:* ${age}\n`;
+  }
+
+  // Add transaction count from DexScreener if available
+  if (source === 'dexscreener' && data.txns) {
+    const total24h = (data.txns.h24?.buys || 0) + (data.txns.h24?.sells || 0);
+    if (total24h > 0) {
+      message += `📊 *24h Txns:* ${total24h.toLocaleString()}\n`;
+    }
   }
 
   message += `\n📝 *CA:* \`${contractAddress}\`\n`;
