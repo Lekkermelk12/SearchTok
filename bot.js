@@ -260,14 +260,28 @@ function formatTokenData(result, contractAddress) {
     socials = {};
     if (data.info?.socials) {
       data.info.socials.forEach(social => {
-        if (social.type === 'twitter') socials.twitter = social.url;
-        if (social.type === 'telegram') socials.telegram = social.url;
-        if (social.type === 'website') socials.website = social.url;
-        if (social.type === 'tiktok') socials.tiktok = social.url;
+        // Smart TikTok detection - check if URL contains tiktok.com
+        if (social.url && social.url.includes('tiktok.com')) {
+          socials.tiktok = social.url;
+        } else if (social.type === 'twitter') {
+          socials.twitter = social.url;
+        } else if (social.type === 'telegram') {
+          socials.telegram = social.url;
+        } else if (social.type === 'website') {
+          socials.website = social.url;
+        } else if (social.type === 'tiktok') {
+          socials.tiktok = social.url;
+        }
       });
     }
     if (data.info?.websites && data.info.websites.length > 0 && !socials.website) {
-      socials.website = data.info.websites[0].url;
+      // Check if website is actually a TikTok link
+      const websiteUrl = data.info.websites[0].url;
+      if (websiteUrl && websiteUrl.includes('tiktok.com')) {
+        socials.tiktok = websiteUrl;
+      } else {
+        socials.website = websiteUrl;
+      }
     }
   }
 
@@ -307,6 +321,9 @@ function formatTokenData(result, contractAddress) {
   }
 
   message += `\n📊 [Solscan](https://solscan.io/token/${contractAddress}) • [DexScreener](https://dexscreener.com/solana/${contractAddress})`;
+
+  // Add Bloom referral link
+  message += `\n\n🌸 [Trade on Bloom](https://t.me/BloomSolana_bot?start=ref_cardboardg_${contractAddress})`;
 
   return { message, imageUrl, socials };
 }
@@ -504,42 +521,39 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
       return;
     }
 
-    // Create inline keyboard with Bloom and TikTok buttons
-    const buttons = [
-      {
-        text: '🌸 Trade on Bloom',
-        url: `https://t.me/BloomSolana_bot?start=ref_cardboardg_${contractAddress}`
-      }
-    ];
+    // Create inline keyboard with TikTok button only
+    let inlineKeyboard = null;
 
     // Add TikTok button if TikTok link exists
     if (formatted.socials?.tiktok) {
-      buttons.push({
-        text: '🎵 TikTok',
-        url: formatted.socials.tiktok
-      });
+      inlineKeyboard = {
+        inline_keyboard: [[
+          {
+            text: '🎵 TikTok',
+            url: formatted.socials.tiktok
+          }
+        ]]
+      };
     }
-
-    const inlineKeyboard = {
-      inline_keyboard: [buttons]
-    };
 
     // Post to channel
     try {
+      const messageOptions = {
+        parse_mode: 'Markdown'
+      };
+
+      if (inlineKeyboard) {
+        messageOptions.reply_markup = inlineKeyboard;
+      }
+
       if (formatted.imageUrl) {
         // Send with image
-        await bot.sendPhoto(channelId, formatted.imageUrl, {
-          caption: formatted.message,
-          parse_mode: 'Markdown',
-          reply_markup: inlineKeyboard
-        });
+        messageOptions.caption = formatted.message;
+        await bot.sendPhoto(channelId, formatted.imageUrl, messageOptions);
       } else {
         // Send text only
-        await bot.sendMessage(channelId, formatted.message, {
-          parse_mode: 'Markdown',
-          disable_web_page_preview: false,
-          reply_markup: inlineKeyboard
-        });
+        messageOptions.disable_web_page_preview = false;
+        await bot.sendMessage(channelId, formatted.message, messageOptions);
       }
 
       // Notify user of success
@@ -624,40 +638,37 @@ bot.on('message', async (msg) => {
         const formatted = formatTokenData(tokenData, ca);
 
         if (formatted && formatted.message) {
-          // Create inline keyboard with Bloom and TikTok buttons
-          const buttons = [
-            {
-              text: '🌸 Trade on Bloom',
-              url: `https://t.me/BloomSolana_bot?start=ref_cardboardg_${ca}`
-            }
-          ];
+          // Create inline keyboard with TikTok button only
+          let inlineKeyboard = null;
 
           // Add TikTok button if TikTok link exists
           if (formatted.socials?.tiktok) {
-            buttons.push({
-              text: '🎵 TikTok',
-              url: formatted.socials.tiktok
-            });
+            inlineKeyboard = {
+              inline_keyboard: [[
+                {
+                  text: '🎵 TikTok',
+                  url: formatted.socials.tiktok
+                }
+              ]]
+            };
           }
-
-          const inlineKeyboard = {
-            inline_keyboard: [buttons]
-          };
 
           // Post to channel
           try {
+            const messageOptions = {
+              parse_mode: 'Markdown'
+            };
+
+            if (inlineKeyboard) {
+              messageOptions.reply_markup = inlineKeyboard;
+            }
+
             if (formatted.imageUrl) {
-              await bot.sendPhoto(channelId, formatted.imageUrl, {
-                caption: formatted.message,
-                parse_mode: 'Markdown',
-                reply_markup: inlineKeyboard
-              });
+              messageOptions.caption = formatted.message;
+              await bot.sendPhoto(channelId, formatted.imageUrl, messageOptions);
             } else {
-              await bot.sendMessage(channelId, formatted.message, {
-                parse_mode: 'Markdown',
-                disable_web_page_preview: false,
-                reply_markup: inlineKeyboard
-              });
+              messageOptions.disable_web_page_preview = false;
+              await bot.sendMessage(channelId, formatted.message, messageOptions);
             }
             successCount++;
           } catch (postError) {
