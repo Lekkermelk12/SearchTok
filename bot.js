@@ -15,6 +15,7 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: true });
 const DATA_FILE = path.join(__dirname, 'memecoins.json');
+const TOKENS_FILE = path.join(__dirname, 'tracked_tokens.json');
 
 // Load memecoins data from file
 async function loadMemecoins() {
@@ -45,6 +46,50 @@ async function saveUserMemecoins(userId, memecoins) {
   const allData = await loadMemecoins();
   allData[userId] = memecoins;
   await saveMemecoins(allData);
+}
+
+// Load tracked tokens (for public bot integration)
+async function loadTrackedTokens() {
+  try {
+    const data = await fs.readFile(TOKENS_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+}
+
+// Save tracked tokens (for public bot integration)
+async function saveTrackedTokens(tokens) {
+  await fs.writeFile(TOKENS_FILE, JSON.stringify(tokens, null, 2));
+}
+
+// Add token to tracked list
+async function addToTrackedTokens(contractAddress, tokenData) {
+  const tokens = await loadTrackedTokens();
+
+  // Check if already tracked
+  const exists = tokens.find(t => t.contractAddress === contractAddress);
+  if (exists) return;
+
+  // Add new token with relevant data
+  tokens.push({
+    contractAddress,
+    name: tokenData.name || 'Unknown',
+    symbol: tokenData.symbol || 'Unknown',
+    marketCap: tokenData.marketCap,
+    price: tokenData.price,
+    holders: tokenData.holders,
+    imageUrl: tokenData.imageUrl,
+    pairCreatedAt: tokenData.pairCreatedAt,
+    createdTimestamp: tokenData.createdTimestamp,
+    lastUpdated: Date.now()
+  });
+
+  await saveTrackedTokens(tokens);
+  console.log(`✅ Added to tracked tokens: ${tokenData.name}`);
 }
 
 // Scrape token data from Solscan website
@@ -423,7 +468,7 @@ function formatTokenData(result, contractAddress) {
     socials.tiktok = `https://www.tiktok.com/search/video?q=${encodedName}&t=1769361824988`;
   }
 
-  return { message, imageUrl, socials };
+  return { message, imageUrl, socials, name, symbol, marketCap, price, holders };
 }
 
 // /start command
@@ -675,6 +720,18 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
         await bot.sendMessage(channelId, formatted.message, messageOptions);
       }
 
+      // Add to tracked tokens for public bot
+      await addToTrackedTokens(contractAddress, {
+        name: formatted.name,
+        symbol: formatted.symbol,
+        marketCap: formatted.marketCap,
+        price: formatted.price,
+        holders: formatted.holders,
+        imageUrl: formatted.imageUrl,
+        pairCreatedAt: tokenData.data?.pairCreatedAt,
+        createdTimestamp: tokenData.data?.creation_timestamp || tokenData.gmgnData?.creation_timestamp
+      });
+
       // Notify user of success
       await bot.editMessageText(
         `✅ Posted to channel!\n\n${formatted.message}`,
@@ -789,6 +846,19 @@ bot.on('message', async (msg) => {
               messageOptions.disable_web_page_preview = false;
               await bot.sendMessage(channelId, formatted.message, messageOptions);
             }
+
+            // Add to tracked tokens for public bot
+            await addToTrackedTokens(ca, {
+              name: formatted.name,
+              symbol: formatted.symbol,
+              marketCap: formatted.marketCap,
+              price: formatted.price,
+              holders: formatted.holders,
+              imageUrl: formatted.imageUrl,
+              pairCreatedAt: tokenData.data?.pairCreatedAt,
+              createdTimestamp: tokenData.data?.creation_timestamp || tokenData.gmgnData?.creation_timestamp
+            });
+
             successCount++;
           } catch (postError) {
             console.error(`Error posting ${ca} to channel:`, postError.message);
