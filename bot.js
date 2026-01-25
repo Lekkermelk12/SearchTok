@@ -296,12 +296,11 @@ function formatTokenData(result, contractAddress) {
 
   message += `\n📝 *CA:* \`${contractAddress}\`\n`;
 
-  // Add socials if they exist
+  // Add text socials if they exist (keeping for backwards compatibility)
   const socialLinks = [];
   if (socials?.website) socialLinks.push(`[Website](${socials.website})`);
   if (socials?.twitter) socialLinks.push(`[Twitter](${socials.twitter})`);
   if (socials?.telegram) socialLinks.push(`[Telegram](${socials.telegram})`);
-  if (socials?.tiktok) socialLinks.push(`[TikTok](${socials.tiktok})`);
 
   if (socialLinks.length > 0) {
     message += `\n🔗 ${socialLinks.join(' • ')}\n`;
@@ -309,7 +308,7 @@ function formatTokenData(result, contractAddress) {
 
   message += `\n📊 [Solscan](https://solscan.io/token/${contractAddress}) • [DexScreener](https://dexscreener.com/solana/${contractAddress})`;
 
-  return { message, imageUrl };
+  return { message, imageUrl, socials };
 }
 
 // /start command
@@ -505,14 +504,24 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
       return;
     }
 
-    // Create inline keyboard with Bloom button
+    // Create inline keyboard with Bloom and TikTok buttons
+    const buttons = [
+      {
+        text: '🌸 Trade on Bloom',
+        url: `https://t.me/BloomSolana_bot?start=ref_cardboardg_${contractAddress}`
+      }
+    ];
+
+    // Add TikTok button if TikTok link exists
+    if (formatted.socials?.tiktok) {
+      buttons.push({
+        text: '🎵 TikTok',
+        url: formatted.socials.tiktok
+      });
+    }
+
     const inlineKeyboard = {
-      inline_keyboard: [[
-        {
-          text: '🌸 Trade on Bloom',
-          url: `https://t.me/BloomSolana_bot?start=ref_cardboardg_${contractAddress}`
-        }
-      ]]
+      inline_keyboard: [buttons]
     };
 
     // Post to channel
@@ -615,14 +624,24 @@ bot.on('message', async (msg) => {
         const formatted = formatTokenData(tokenData, ca);
 
         if (formatted && formatted.message) {
-          // Create inline keyboard with Bloom button
+          // Create inline keyboard with Bloom and TikTok buttons
+          const buttons = [
+            {
+              text: '🌸 Trade on Bloom',
+              url: `https://t.me/BloomSolana_bot?start=ref_cardboardg_${ca}`
+            }
+          ];
+
+          // Add TikTok button if TikTok link exists
+          if (formatted.socials?.tiktok) {
+            buttons.push({
+              text: '🎵 TikTok',
+              url: formatted.socials.tiktok
+            });
+          }
+
           const inlineKeyboard = {
-            inline_keyboard: [[
-              {
-                text: '🌸 Trade on Bloom',
-                url: `https://t.me/BloomSolana_bot?start=ref_cardboardg_${ca}`
-              }
-            ]]
+            inline_keyboard: [buttons]
           };
 
           // Post to channel
