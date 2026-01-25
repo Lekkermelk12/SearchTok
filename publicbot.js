@@ -131,56 +131,54 @@ function formatAge(tokenData) {
   }
 }
 
-// Scan channel history for tokens
-async function scanChannelHistory() {
-  console.log('📡 Scanning channel history for tokens...');
+// /scan command - Manually add a token to track
+bot.onText(/\/scan (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const contractAddress = match[1].trim();
+
+  const loadingMsg = await bot.sendMessage(chatId, '⏳ Scanning token...');
 
   try {
-    let tokens = await loadTrackedTokens();
-    let offset = 0;
-    let foundNew = 0;
+    const tokens = await loadTrackedTokens();
+    const exists = tokens.find(t => t.contractAddress === contractAddress);
 
-    // Get last 100 messages from channel
-    for (let i = 0; i < 5; i++) {
-      try {
-        const updates = await bot.getUpdates({ offset, limit: 100, timeout: 10 });
-
-        if (updates.length === 0) break;
-
-        for (const update of updates) {
-          if (update.channel_post && update.channel_post.chat.id.toString() === channelId) {
-            const text = update.channel_post.text || update.channel_post.caption || '';
-            const contractAddress = extractContractAddress(text);
-
-            if (contractAddress && !tokens.find(t => t.contractAddress === contractAddress)) {
-              console.log(`  Found token: ${contractAddress}`);
-              const tokenData = await getTokenData(contractAddress);
-              if (tokenData) {
-                tokens.push(tokenData);
-                foundNew++;
-              }
-              // Small delay to avoid rate limiting
-              await new Promise(resolve => setTimeout(resolve, 300));
-            }
-          }
-          offset = update.update_id + 1;
-        }
-      } catch (error) {
-        console.log('Error scanning history:', error.message);
-        break;
-      }
+    if (exists) {
+      await bot.editMessageText(
+        `✅ Token already tracked!\n\n*${exists.name}* ($${exists.symbol})`,
+        { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'Markdown' }
+      );
+      return;
     }
 
-    if (foundNew > 0) {
-      await saveTrackedTokens(tokens);
-      console.log(`✅ Found and tracked ${foundNew} new tokens from channel history`);
-    } else {
-      console.log(`ℹ️  No new tokens found in channel history`);
+    const tokenData = await getTokenData(contractAddress);
+
+    if (!tokenData) {
+      await bot.editMessageText(
+        '❌ Could not fetch token data. Check the contract address and try again.',
+        { chat_id: chatId, message_id: loadingMsg.message_id }
+      );
+      return;
     }
+
+    tokens.push(tokenData);
+    await saveTrackedTokens(tokens);
+
+    await bot.editMessageText(
+      `✅ *Token Added!*\n\n` +
+      `*Name:* ${tokenData.name}\n` +
+      `*Symbol:* $${tokenData.symbol}\n` +
+      `*MC:* $${tokenData.marketCap ? (tokenData.marketCap/1000).toFixed(0)+'K' : 'N/A'}\n\n` +
+      `Total tracked: ${tokens.length} tokens`,
+      { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'Markdown' }
+    );
   } catch (error) {
-    console.log('Error in scanChannelHistory:', error.message);
+    console.error('Error scanning token:', error);
+    await bot.editMessageText(
+      '❌ Error scanning token. Please try again.',
+      { chat_id: chatId, message_id: loadingMsg.message_id }
+    );
   }
-}
+});
 
 // Monitor channel for new token posts
 bot.on('channel_post', async (msg) => {
@@ -221,6 +219,8 @@ Track and rank the hottest TikTok meme coins on Solana.
 📊 /rank - View top coins by market cap or age
 🔍 /filter - Filter coins by market cap and age ranges
   Example: \`/filter 100k-500k 1d-10d\`
+➕ /scan <CA> - Manually add a token to track
+  Example: \`/scan 6WdHhpRY7vL8SQ69bd89tAj3sk8jsjBrCLDUTZSNpump\`
 
 ℹ️ /help - Show this message
 
@@ -251,7 +251,11 @@ bot.onText(/\/help/, (msg) => {
   \`/filter 100k-500k 1d-10d\` - Coins between $100K-$500K MC, 1-10 days old
   \`/filter 1m-5m 1h-3d\` - Coins between $1M-$5M MC, 1 hour to 3 days old
 
-💡 All data is fetched live from the channel!
+*Manual Tracking:*
+/scan <contract_address> - Add a token to track
+  Example: \`/scan 6WdHhpRY7vL8SQ69bd89tAj3sk8jsjBrCLDUTZSNpump\`
+
+💡 Tokens are auto-tracked from channel posts, or manually with /scan!
   `;
   bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 });
@@ -649,13 +653,6 @@ bot.onText(/\/filter (.+)/, async (msg, match) => {
   }
 });
 
-// Initialize bot on startup
-(async () => {
-  console.log('🤖 Niche TikTok Memes Bot (@nichedbot) is running...');
-  console.log('📡 Initializing: Scanning channel for tokens...');
-
-  // Scan channel history on startup
-  await scanChannelHistory();
-
-  console.log('✅ Bot ready! Users can now use /rank and /filter commands.');
-})();
+console.log('🤖 Niche TikTok Memes Bot (@nichedbot) is running...');
+console.log('📊 Monitoring channel for new tokens...');
+console.log('✅ Bot ready! Users can use /rank, /filter, and /scan commands.');
