@@ -21,11 +21,11 @@ const POSTED_TOKENS_FILE = path.join(__dirname, 'posted_tokens.json');
 // Auto-scanner configuration
 const SCANNER_CONFIG = {
   MIN_MARKET_CAP: 50000,      // $50K minimum
-  MIN_VOLUME_24H: 10000,      // $10K 24h volume minimum (NOT USED - pump.fun API doesn't provide volume)
+  MIN_VOLUME_24H: 10000,      // $10K 24h volume minimum
   MIN_AGE_HOURS: 1,           // At least 1 hour old
   MAX_AGE_DAYS: 7,            // Max 7 days old
   SCAN_INTERVAL: 5 * 60 * 1000, // Check every 5 minutes
-  REQUIRE_TIKTOK: true        // Must have TikTok link
+  REQUIRE_TIKTOK: true        // Must have TikTok link (fetched from pump.fun API)
 };
 
 // Auto-scanner state
@@ -571,51 +571,49 @@ function formatTokenData(result, contractAddress) {
 // Scan DexScreener for recent pump.fun tokens
 async function scanPumpFunTokens() {
   try {
-    console.log('🔍 Scanning pump.fun for new tokens...');
+    console.log('🔍 Scanning DexScreener for pump.fun tokens...');
 
-    // Fetch tokens directly from pump.fun API
-    const response = await axios.get('https://frontend-api-v3.pump.fun/coins/currently-live', {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Referer': 'https://pump.fun/'
-      },
-      params: {
-        limit: 100,
-        offset: 0,
-        order: 'created_timestamp',
-        sort: 'DESC'
-      }
+    // Fetch recent Solana pairs from DexScreener
+    const response = await axios.get('https://api.dexscreener.com/latest/dex/pairs/solana', {
+      timeout: 15000
     });
 
-    if (!response.data || !Array.isArray(response.data)) {
-      console.log('No tokens found');
+    if (!response.data || !response.data.pairs) {
+      console.log('No pairs found');
       return [];
     }
 
-    console.log(`Found ${response.data.length} pump.fun tokens`);
-    return response.data;
+    // Filter for pump.fun tokens only
+    const pumpFunTokens = response.data.pairs.filter(pair => {
+      const url = pair.url || '';
+      return url.includes('pump.fun') || url.includes('pump');
+    });
+
+    console.log(`Found ${pumpFunTokens.length} pump.fun tokens from DexScreener`);
+    return pumpFunTokens;
   } catch (error) {
     console.log('Error scanning pump.fun tokens:', error.message);
     return [];
   }
 }
 
-// Check if token meets auto-post criteria (pump.fun data format)
-async function meetsAutoPostCriteria(token) {
+// Check if token meets auto-post criteria (DexScreener + pump.fun data)
+async function meetsAutoPostCriteria(pair) {
   // Check market cap
-  const marketCap = token.market_cap || token.usd_market_cap || 0;
+  const marketCap = pair.marketCap || pair.fdv || 0;
   if (marketCap < SCANNER_CONFIG.MIN_MARKET_CAP) {
     return { pass: false, reason: `MC too low: $${marketCap.toFixed(0)}` };
   }
 
-  // Note: pump.fun API doesn't provide volume data, so we skip volume check
-  // If you need volume filtering, you'd need to fetch from DexScreener separately
+  // Check 24h volume
+  const volume24h = pair.volume?.h24 || 0;
+  if (volume24h < SCANNER_CONFIG.MIN_VOLUME_24H) {
+    return { pass: false, reason: `Volume too low: $${volume24h.toFixed(0)}` };
+  }
 
-  // Check age using created_timestamp
-  if (token.created_timestamp) {
-    const createdDate = new Date(token.created_timestamp);
+  // Check age
+  if (pair.pairCreatedAt) {
+    const createdDate = new Date(pair.pairCreatedAt);
     const ageMs = Date.now() - createdDate.getTime();
     const ageHours = ageMs / (1000 * 60 * 60);
     const ageDays = ageHours / 24;
@@ -629,18 +627,30 @@ async function meetsAutoPostCriteria(token) {
     }
   }
 
-  // Check for TikTok link if required (data already in token object)
+  // Check for TikTok link if required - fetch from pump.fun API
   if (SCANNER_CONFIG.REQUIRE_TIKTOK) {
-    let hasTikTok = false;
+    const ca = pair.baseToken?.address;
+    if (!ca) {
+      return { pass: false, reason: 'No contract address' };
+    }
+
+    // Fetch actual token data from pump.fun
+    const pumpData = await fetchPumpFunData(ca);
+
+    if (!pumpData) {
+      return { pass: false, reason: 'Failed to fetch pump.fun data' };
+    }
 
     // Check twitter, telegram, and website fields for TikTok links
-    if (token.twitter && token.twitter.includes('tiktok.com')) {
+    let hasTikTok = false;
+
+    if (pumpData.twitter && pumpData.twitter.includes('tiktok.com')) {
       hasTikTok = true;
     }
-    if (token.telegram && token.telegram.includes('tiktok.com')) {
+    if (pumpData.telegram && pumpData.telegram.includes('tiktok.com')) {
       hasTikTok = true;
     }
-    if (token.website && token.website.includes('tiktok.com')) {
+    if (pumpData.website && pumpData.website.includes('tiktok.com')) {
       hasTikTok = true;
     }
 
@@ -737,12 +747,12 @@ async function runAutoScan() {
   console.log('\n🤖 Running auto-scan cycle...');
 
   try {
-    const tokens = await scanPumpFunTokens();
+    const pairs = await scanPumpFunTokens();
     let posted = 0;
     let checked = 0;
 
-    for (const token of tokens) {
-      const ca = token.mint;
+    for (const pair of pairs) {
+      const ca = pair.baseToken?.address;
       if (!ca) continue;
 
       checked++;
@@ -752,11 +762,11 @@ async function runAutoScan() {
         continue;
       }
 
-      // Check if meets criteria
-      const check = await meetsAutoPostCriteria(token);
+      // Check if meets criteria (includes pump.fun TikTok validation)
+      const check = await meetsAutoPostCriteria(pair);
 
       if (check.pass) {
-        console.log(`  ✅ Found qualifying token: ${token.symbol || token.name}`);
+        console.log(`  ✅ Found qualifying token: ${pair.baseToken?.symbol}`);
         const success = await autoPostToken(ca);
         if (success) {
           posted++;
@@ -764,7 +774,7 @@ async function runAutoScan() {
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
       } else {
-        console.log(`  ⏭️  Skipped ${token.symbol || token.name}: ${check.reason}`);
+        console.log(`  ⏭️  Skipped ${pair.baseToken?.symbol}: ${check.reason}`);
       }
     }
 
