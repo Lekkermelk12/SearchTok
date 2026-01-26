@@ -278,6 +278,29 @@ async function fetchGmgnFullData(contractAddress) {
   }
 }
 
+// Fetch token data from pump.fun API (official source for socials)
+async function fetchPumpFunData(contractAddress) {
+  try {
+    const response = await axios.get(`https://frontend-api-v3.pump.fun/coins/${contractAddress}`, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://pump.fun/'
+      }
+    });
+
+    if (response.data) {
+      console.log('🎯 pump.fun data received');
+      return response.data;
+    }
+    return null;
+  } catch (error) {
+    console.log('pump.fun fetch failed:', error.message);
+    return null;
+  }
+}
+
 // Get token data with fallback and combine sources
 async function getTokenData(contractAddress) {
   // Try DexScreener first (best for images and socials)
@@ -470,6 +493,30 @@ function formatTokenData(result, contractAddress) {
     }
   }
 
+  // Override socials with pump.fun data if available (most accurate source)
+  const pumpData = result.pumpData;
+  if (pumpData) {
+    console.log('🎯 Using pump.fun socials data');
+
+    // Extract image from pump.fun if not already set
+    if (!imageUrl && pumpData.image_uri) {
+      imageUrl = pumpData.image_uri;
+    }
+
+    // Override socials with pump.fun data
+    if (pumpData.twitter) socials.twitter = pumpData.twitter;
+    if (pumpData.telegram) socials.telegram = pumpData.telegram;
+
+    // Check website field for TikTok
+    if (pumpData.website) {
+      if (pumpData.website.includes('tiktok.com')) {
+        socials.tiktok = pumpData.website;
+      } else {
+        socials.website = pumpData.website;
+      }
+    }
+  }
+
   let message = `🪙 *${name}* ($${symbol})\n\n`;
 
   if (price) {
@@ -551,7 +598,7 @@ async function scanPumpFunTokens() {
 }
 
 // Check if token meets auto-post criteria
-function meetsAutoPostCriteria(pair) {
+async function meetsAutoPostCriteria(pair) {
   // Check market cap
   const marketCap = pair.marketCap || pair.fdv || 0;
   if (marketCap < SCANNER_CONFIG.MIN_MARKET_CAP) {
@@ -580,26 +627,31 @@ function meetsAutoPostCriteria(pair) {
     }
   }
 
-  // Check for TikTok link if required
+  // Check for TikTok link if required - fetch from pump.fun API
   if (SCANNER_CONFIG.REQUIRE_TIKTOK) {
-    let hasTikTok = false;
-
-    if (pair.info?.socials) {
-      for (const social of pair.info.socials) {
-        if (social.url && social.url.includes('tiktok.com')) {
-          hasTikTok = true;
-          break;
-        }
-      }
+    const ca = pair.baseToken?.address;
+    if (!ca) {
+      return { pass: false, reason: 'No contract address' };
     }
 
-    if (pair.info?.websites) {
-      for (const website of pair.info.websites) {
-        if (website.url && website.url.includes('tiktok.com')) {
-          hasTikTok = true;
-          break;
-        }
-      }
+    // Fetch actual token data from pump.fun
+    const pumpData = await fetchPumpFunData(ca);
+
+    if (!pumpData) {
+      return { pass: false, reason: 'Failed to fetch pump.fun data' };
+    }
+
+    // Check twitter, telegram, and website fields for TikTok links
+    let hasTikTok = false;
+
+    if (pumpData.twitter && pumpData.twitter.includes('tiktok.com')) {
+      hasTikTok = true;
+    }
+    if (pumpData.telegram && pumpData.telegram.includes('tiktok.com')) {
+      hasTikTok = true;
+    }
+    if (pumpData.website && pumpData.website.includes('tiktok.com')) {
+      hasTikTok = true;
     }
 
     if (!hasTikTok) {
@@ -615,11 +667,19 @@ async function autoPostToken(contractAddress) {
   try {
     console.log(`🤖 Auto-posting token: ${contractAddress}`);
 
+    // Fetch pump.fun data for accurate socials
+    const pumpData = await fetchPumpFunData(contractAddress);
+
     const tokenData = await getTokenData(contractAddress);
 
     if (!tokenData) {
       console.log('  ❌ Could not fetch token data');
       return false;
+    }
+
+    // Merge pump.fun socials into token data
+    if (pumpData) {
+      tokenData.pumpData = pumpData;
     }
 
     const formatted = formatTokenData(tokenData, contractAddress);
@@ -703,7 +763,7 @@ async function runAutoScan() {
       }
 
       // Check if meets criteria
-      const check = meetsAutoPostCriteria(pair);
+      const check = await meetsAutoPostCriteria(pair);
 
       if (check.pass) {
         console.log(`  ✅ Found qualifying token: ${pair.baseToken?.symbol}`);
@@ -1116,6 +1176,9 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
   const loadingMsg = await bot.sendMessage(chatId, '🔍 Fetching token data...');
 
   try {
+    // Fetch pump.fun data for accurate socials
+    const pumpData = await fetchPumpFunData(contractAddress);
+
     const tokenData = await getTokenData(contractAddress);
 
     if (!tokenData) {
@@ -1126,6 +1189,11 @@ bot.onText(/\/post (.+)/, async (msg, match) => {
         { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'Markdown' }
       );
       return;
+    }
+
+    // Merge pump.fun socials into token data
+    if (pumpData) {
+      tokenData.pumpData = pumpData;
     }
 
     const formatted = formatTokenData(tokenData, contractAddress);
@@ -1261,9 +1329,17 @@ bot.on('message', async (msg) => {
     const ca = contractAddresses[i];
 
     try {
+      // Fetch pump.fun data for accurate socials
+      const pumpData = await fetchPumpFunData(ca);
+
       const tokenData = await getTokenData(ca);
 
       if (tokenData) {
+        // Merge pump.fun socials into token data
+        if (pumpData) {
+          tokenData.pumpData = pumpData;
+        }
+
         const formatted = formatTokenData(tokenData, ca);
 
         if (formatted && formatted.message) {
