@@ -4,8 +4,10 @@
   "description": "Telegram bot for tracking TikTok Solana memecoins",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js",
-    "dev": "node bot.js"
+    "start": "concurrently \"node bot.js\" \"node publicbot.js\"",
+    "dev": "concurrently \"node bot.js\" \"node publicbot.js\"",
+    "posting": "node bot.js",
+    "public": "node publicbot.js"
   },
   "keywords": [
     "telegram",
@@ -22,5 +24,8 @@
     "dotenv": "^16.4.5",
     "node-telegram-bot-api": "^0.66.0",
     "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }
