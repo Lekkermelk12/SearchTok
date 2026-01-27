@@ -20,6 +20,7 @@
     "axios": "^1.13.2",
     "cheerio": "^1.2.0",
     "dotenv": "^16.4.5",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "ws": "^8.19.0"
   }
 }
