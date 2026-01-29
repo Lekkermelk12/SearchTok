@@ -626,20 +626,31 @@ async function handleNewToken(tokenData) {
     const mint = tokenData.mint;
 
     if (!mint) {
-      console.log('⏭️  Skipped: No mint address');
-      return;
+      return; // Silently skip tokens without mint address
     }
 
     // Skip if already posted
     if (await isTokenPosted(mint)) {
-      return;
+      return; // Silently skip already posted tokens
     }
 
-    console.log(`\n🆕 New token detected: ${tokenData.name} ($${tokenData.symbol})`);
+    // Quick age check first to avoid spam
+    if (tokenData.created_timestamp) {
+      const ageMs = Date.now() - tokenData.created_timestamp;
+      const ageHours = ageMs / (1000 * 60 * 60);
+
+      // Silently skip if too new (reduces console spam)
+      if (ageHours < SCANNER_CONFIG.MIN_AGE_HOURS) {
+        return;
+      }
+    }
+
+    // Only log tokens that pass minimum age requirement
+    console.log(`\n🆕 Token detected: ${tokenData.name} ($${tokenData.symbol})`);
     console.log(`   Mint: ${mint}`);
     console.log(`   MC: $${tokenData.market_cap?.toFixed(0) || '0'}`);
 
-    // Check if meets criteria
+    // Check if meets ALL criteria (MC, age, TikTok)
     const check = await meetsAutoPostCriteria(tokenData);
 
     if (check.pass) {
@@ -1012,13 +1023,18 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
         SCANNER_CONFIG.MIN_VOLUME_24H = amount;
         bot.sendMessage(chatId, `✅ Min 24h Volume set to $${amount.toLocaleString()}`);
       } else if (setting === 'minage') {
-        const hours = parseInt(value);
+        const hours = parseFloat(value);
         if (isNaN(hours) || hours < 0) {
-          bot.sendMessage(chatId, '❌ Invalid hours! Use a positive number (e.g., 1)');
+          bot.sendMessage(chatId, '❌ Invalid hours! Use a positive number (e.g., 0.5 for 30 min)');
           return;
         }
         SCANNER_CONFIG.MIN_AGE_HOURS = hours;
-        bot.sendMessage(chatId, `✅ Min Age set to ${hours} hour${hours !== 1 ? 's' : ''}`);
+
+        // Format hours nicely (show as minutes if < 1 hour)
+        const displayText = hours < 1
+          ? `${(hours * 60).toFixed(0)} minutes`
+          : `${hours} hour${hours !== 1 ? 's' : ''}`;
+        bot.sendMessage(chatId, `✅ Min Age set to ${displayText}`);
       } else if (setting === 'maxage') {
         const days = parseInt(value);
         if (isNaN(days) || days < 0) {
