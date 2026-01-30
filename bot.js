@@ -4,7 +4,6 @@ const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const WebSocket = require('ws');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const channelId = process.env.CHANNEL_ID || '-1003864629972';
@@ -22,10 +21,10 @@ const POSTED_TOKENS_FILE = path.join(__dirname, 'posted_tokens.json');
 // Auto-scanner configuration
 const SCANNER_CONFIG = {
   MIN_MARKET_CAP: 50000,      // $50K minimum (pump.fun data)
-  MIN_VOLUME_24H: 10000,      // NOT USED (WebSocket provides no volume data)
-  MIN_AGE_HOURS: 1,           // At least 1 hour old
+  MIN_VOLUME_24H: 10000,      // NOT USED (pump.fun API doesn't provide volume)
+  MIN_AGE_HOURS: 0.42,        // At least 25 minutes old (0.42 hours)
   MAX_AGE_DAYS: 7,            // Max 7 days old
-  SCAN_INTERVAL: 5 * 60 * 1000, // NOT USED (WebSocket is real-time)
+  SCAN_INTERVAL: 5 * 60 * 1000, // Check every 5 minutes
   REQUIRE_TIKTOK: true        // Must have TikTok link (twitter/telegram/website fields)
 };
 
@@ -569,11 +568,33 @@ function formatTokenData(result, contractAddress) {
 
 // ============= AUTO-SCANNER FUNCTIONS =============
 
-// WebSocket connection for PumpPortal
-let ws = null;
-let wsReconnectTimeout = null;
+// Fetch existing tokens from pump.fun API
+async function fetchPumpFunTokens() {
+  try {
+    const response = await axios.get('https://frontend-api-v3.pump.fun/coins/currently-live', {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://pump.fun/'
+      },
+      params: {
+        limit: 100,
+        offset: 0
+      }
+    });
 
-// Check if token meets auto-post criteria (pump.fun WebSocket data)
+    if (response.data && Array.isArray(response.data)) {
+      return response.data;
+    }
+    return [];
+  } catch (error) {
+    console.log('Error fetching pump.fun tokens:', error.message);
+    return [];
+  }
+}
+
+// Check if token meets auto-post criteria (pump.fun data)
 async function meetsAutoPostCriteria(tokenData) {
   // Get market cap from pump.fun data
   const marketCap = tokenData.market_cap || tokenData.usd_market_cap || 0;
@@ -620,110 +641,49 @@ async function meetsAutoPostCriteria(tokenData) {
   return { pass: true };
 }
 
-// Handle new token event from WebSocket
-async function handleNewToken(tokenData) {
+// Scan existing tokens and post qualifying ones
+async function runScanCycle() {
+  console.log('\n🔍 Scanning existing pump.fun tokens...');
+
   try {
-    const mint = tokenData.mint;
+    const tokens = await fetchPumpFunTokens();
+    console.log(`   Found ${tokens.length} tokens to check`);
 
-    if (!mint) {
-      return; // Silently skip tokens without mint address
-    }
+    let checked = 0;
+    let posted = 0;
 
-    // Skip if already posted
-    if (await isTokenPosted(mint)) {
-      return; // Silently skip already posted tokens
-    }
+    for (const token of tokens) {
+      const mint = token.mint;
+      if (!mint) continue;
 
-    // Quick age check first to avoid spam
-    if (tokenData.created_timestamp) {
-      const ageMs = Date.now() - tokenData.created_timestamp;
-      const ageHours = ageMs / (1000 * 60 * 60);
+      // Skip if already posted
+      if (await isTokenPosted(mint)) {
+        continue;
+      }
 
-      // Silently skip if too new (reduces console spam)
-      if (ageHours < SCANNER_CONFIG.MIN_AGE_HOURS) {
-        return;
+      checked++;
+
+      // Check if meets criteria
+      const check = await meetsAutoPostCriteria(token);
+
+      if (check.pass) {
+        console.log(`\n✅ Qualifying token: ${token.name} ($${token.symbol})`);
+        console.log(`   MC: $${token.market_cap?.toFixed(0)}`);
+        console.log(`   Age: ${((Date.now() - token.created_timestamp) / (1000 * 60 * 60)).toFixed(1)}h`);
+
+        const success = await autoPostToken(mint);
+        if (success) {
+          posted++;
+          console.log(`   ✅ Posted successfully!`);
+          // Add delay between posts
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
       }
     }
 
-    // Only log tokens that pass minimum age requirement
-    console.log(`\n🆕 Token detected: ${tokenData.name} ($${tokenData.symbol})`);
-    console.log(`   Mint: ${mint}`);
-    console.log(`   MC: $${tokenData.market_cap?.toFixed(0) || '0'}`);
-
-    // Check if meets ALL criteria (MC, age, TikTok)
-    const check = await meetsAutoPostCriteria(tokenData);
-
-    if (check.pass) {
-      console.log(`  ✅ Qualifying token found!`);
-      const success = await autoPostToken(mint);
-      if (success) {
-        console.log(`  ✅ Successfully auto-posted: ${tokenData.name}`);
-      }
-    } else {
-      console.log(`  ⏭️  Skipped: ${check.reason}`);
-    }
+    console.log(`\n📊 Scan complete: Checked ${checked} new tokens, Posted ${posted}`);
   } catch (error) {
-    console.log(`  ❌ Error handling new token: ${error.message}`);
-  }
-}
-
-// Connect to PumpPortal WebSocket
-function connectWebSocket() {
-  console.log('🔌 Connecting to PumpPortal WebSocket...');
-
-  ws = new WebSocket('wss://pumpportal.fun/api/data');
-
-  ws.on('open', () => {
-    console.log('✅ Connected to PumpPortal WebSocket');
-
-    // Subscribe to new token events
-    const subscribeMessage = {
-      method: 'subscribeNewToken'
-    };
-    ws.send(JSON.stringify(subscribeMessage));
-    console.log('📡 Subscribed to new token events');
-  });
-
-  ws.on('message', async (data) => {
-    try {
-      const message = JSON.parse(data.toString());
-
-      // Handle new token creation event
-      if (message && message.mint) {
-        await handleNewToken(message);
-      }
-    } catch (error) {
-      console.log('Error parsing WebSocket message:', error.message);
-    }
-  });
-
-  ws.on('error', (error) => {
-    console.log('❌ WebSocket error:', error.message);
-  });
-
-  ws.on('close', () => {
-    console.log('🔌 WebSocket disconnected');
-
-    // Auto-reconnect if scanner is still running
-    if (scannerRunning) {
-      console.log('🔄 Reconnecting in 5 seconds...');
-      wsReconnectTimeout = setTimeout(() => {
-        connectWebSocket();
-      }, 5000);
-    }
-  });
-}
-
-// Disconnect WebSocket
-function disconnectWebSocket() {
-  if (wsReconnectTimeout) {
-    clearTimeout(wsReconnectTimeout);
-    wsReconnectTimeout = null;
-  }
-
-  if (ws) {
-    ws.close();
-    ws = null;
+    console.log('Error in scan cycle:', error.message);
   }
 }
 
@@ -807,19 +767,23 @@ async function autoPostToken(contractAddress) {
   }
 }
 
-// Start auto-scanner (WebSocket-based)
+// Start auto-scanner (Polling-based)
 function startAutoScanner() {
   if (scannerRunning) {
     return false;
   }
 
-  console.log('🚀 Starting auto-scanner (WebSocket)...');
+  console.log('🚀 Starting auto-scanner (Polling)...');
   console.log(`📊 Settings: MC $${SCANNER_CONFIG.MIN_MARKET_CAP}+, Age ${SCANNER_CONFIG.MIN_AGE_HOURS}h-${SCANNER_CONFIG.MAX_AGE_DAYS}d, TikTok: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Required' : 'Optional'}`);
+  console.log(`⏱️  Scan interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes`);
 
   scannerRunning = true;
 
-  // Connect to PumpPortal WebSocket
-  connectWebSocket();
+  // Run first scan immediately
+  runScanCycle();
+
+  // Then run every SCAN_INTERVAL
+  scannerInterval = setInterval(runScanCycle, SCANNER_CONFIG.SCAN_INTERVAL);
 
   return true;
 }
@@ -832,11 +796,12 @@ function stopAutoScanner() {
 
   console.log('⏹️  Stopping auto-scanner...');
 
+  if (scannerInterval) {
+    clearInterval(scannerInterval);
+    scannerInterval = null;
+  }
+
   scannerRunning = false;
-
-  // Disconnect WebSocket
-  disconnectWebSocket();
-
   return true;
 }
 
