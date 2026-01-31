@@ -20,12 +20,13 @@ const POSTED_TOKENS_FILE = path.join(__dirname, 'posted_tokens.json');
 
 // Auto-scanner configuration
 const SCANNER_CONFIG = {
-  MIN_MARKET_CAP: 50000,      // $50K minimum (pump.fun data)
+  MIN_MARKET_CAP: 12000,      // $12K minimum (pump.fun data)
   MIN_VOLUME_24H: 10000,      // NOT USED (pump.fun API doesn't provide volume)
   MIN_AGE_HOURS: 0.42,        // At least 25 minutes old (0.42 hours)
   MAX_AGE_DAYS: 7,            // Max 7 days old
-  SCAN_INTERVAL: 5 * 60 * 1000, // Check every 5 minutes
-  REQUIRE_TIKTOK: true        // Must have TikTok link (twitter/telegram/website fields)
+  SCAN_INTERVAL: 2 * 60 * 1000, // Check every 2 minutes (faster scanning)
+  REQUIRE_TIKTOK: true,       // Must have TikTok link (twitter/telegram/website fields)
+  TOKENS_PER_SCAN: 500        // Check 500 tokens per scan (5 pages of 100)
 };
 
 // Auto-scanner state
@@ -568,26 +569,43 @@ function formatTokenData(result, contractAddress) {
 
 // ============= AUTO-SCANNER FUNCTIONS =============
 
-// Fetch existing tokens from pump.fun API
+// Fetch existing tokens from pump.fun API with pagination
 async function fetchPumpFunTokens() {
   try {
-    const response = await axios.get('https://frontend-api-v3.pump.fun/coins/currently-live', {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Referer': 'https://pump.fun/'
-      },
-      params: {
-        limit: 100,
-        offset: 0
-      }
-    });
+    const allTokens = [];
+    const tokensPerPage = 100;
+    const pagesToFetch = Math.ceil(SCANNER_CONFIG.TOKENS_PER_SCAN / tokensPerPage);
 
-    if (response.data && Array.isArray(response.data)) {
-      return response.data;
+    console.log(`   Fetching ${pagesToFetch} pages (${SCANNER_CONFIG.TOKENS_PER_SCAN} tokens total)...`);
+
+    for (let page = 0; page < pagesToFetch; page++) {
+      const offset = page * tokensPerPage;
+
+      const response = await axios.get('https://frontend-api-v3.pump.fun/coins/currently-live', {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          'Referer': 'https://pump.fun/'
+        },
+        params: {
+          limit: tokensPerPage,
+          offset: offset
+        }
+      });
+
+      if (response.data && Array.isArray(response.data)) {
+        allTokens.push(...response.data);
+        console.log(`   Page ${page + 1}/${pagesToFetch}: ${response.data.length} tokens`);
+      }
+
+      // Small delay between requests to avoid rate limiting
+      if (page < pagesToFetch - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
-    return [];
+
+    return allTokens;
   } catch (error) {
     console.log('Error fetching pump.fun tokens:', error.message);
     return [];
@@ -647,10 +665,13 @@ async function runScanCycle() {
 
   try {
     const tokens = await fetchPumpFunTokens();
-    console.log(`   Found ${tokens.length} tokens to check`);
+    console.log(`   Total tokens fetched: ${tokens.length}`);
 
     let checked = 0;
     let posted = 0;
+    let withTikTok = 0;
+    let passedMC = 0;
+    let passedAge = 0;
 
     for (const token of tokens) {
       const mint = token.mint;
@@ -663,13 +684,28 @@ async function runScanCycle() {
 
       checked++;
 
-      // Check if meets criteria
+      // Track stats
+      const hasTikTok = (token.twitter?.includes('tiktok.com') ||
+                         token.telegram?.includes('tiktok.com') ||
+                         token.website?.includes('tiktok.com'));
+      if (hasTikTok) withTikTok++;
+
+      const mc = token.market_cap || token.usd_market_cap || 0;
+      if (mc >= SCANNER_CONFIG.MIN_MARKET_CAP) passedMC++;
+
+      const ageHours = (Date.now() - token.created_timestamp) / (1000 * 60 * 60);
+      if (ageHours >= SCANNER_CONFIG.MIN_AGE_HOURS && (ageHours / 24) <= SCANNER_CONFIG.MAX_AGE_DAYS) {
+        passedAge++;
+      }
+
+      // Check if meets ALL criteria
       const check = await meetsAutoPostCriteria(token);
 
       if (check.pass) {
         console.log(`\n✅ Qualifying token: ${token.name} ($${token.symbol})`);
-        console.log(`   MC: $${token.market_cap?.toFixed(0)}`);
-        console.log(`   Age: ${((Date.now() - token.created_timestamp) / (1000 * 60 * 60)).toFixed(1)}h`);
+        console.log(`   MC: $${mc.toFixed(0)}`);
+        console.log(`   Age: ${ageHours.toFixed(1)}h`);
+        console.log(`   TikTok: ${hasTikTok ? 'Yes' : 'No'}`);
 
         const success = await autoPostToken(mint);
         if (success) {
@@ -681,7 +717,12 @@ async function runScanCycle() {
       }
     }
 
-    console.log(`\n📊 Scan complete: Checked ${checked} new tokens, Posted ${posted}`);
+    console.log(`\n📊 Scan complete:`);
+    console.log(`   Checked: ${checked} new tokens`);
+    console.log(`   With TikTok: ${withTikTok}`);
+    console.log(`   MC $${SCANNER_CONFIG.MIN_MARKET_CAP}+: ${passedMC}`);
+    console.log(`   Age ${SCANNER_CONFIG.MIN_AGE_HOURS}h-${SCANNER_CONFIG.MAX_AGE_DAYS}d: ${passedAge}`);
+    console.log(`   Posted: ${posted}`);
   } catch (error) {
     console.log('Error in scan cycle:', error.message);
   }
