@@ -600,12 +600,12 @@ async function fetchPumpFunTokens() {
       });
 
       if (response.data && Array.isArray(response.data)) {
-        // Filter for PumpSwap or bonding curve tokens (NOT Raydium)
+        // Filter for PumpSwap tokens OR bonding curve tokens from pump.fun
         const pumpTokens = response.data.filter(token =>
-          token.pump_swap_pool || (!token.raydium_pool && !token.complete)
+          token.pump_swap_pool || !token.complete
         );
         allTokens.push(...pumpTokens);
-        console.log(`   Page ${page + 1}/${pagesToFetch}: ${pumpTokens.length}/${response.data.length} pump tokens (PumpSwap or bonding curve)`);
+        console.log(`   Page ${page + 1}/${pagesToFetch}: ${pumpTokens.length}/${response.data.length} pump.fun tokens (PumpSwap or bonding curve)`);
       }
 
       // Small delay between requests to avoid rate limiting
@@ -614,7 +614,7 @@ async function fetchPumpFunTokens() {
       }
     }
 
-    console.log(`   Total graduated tokens: ${allTokens.length}`);
+    console.log(`   Total pump.fun tokens found: ${allTokens.length}`);
     return allTokens;
   } catch (error) {
     console.log('Error fetching pump.fun tokens:', error.message);
