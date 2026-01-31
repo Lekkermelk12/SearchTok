@@ -39,32 +39,50 @@ let LIVE_DATA = {
 // Fetch real-time SOL price from multiple sources
 async function fetchLiveSOLPrice() {
   try {
-    // Try CoinGecko first (free, reliable)
-    const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
-      params: {
-        ids: 'solana',
-        vs_currencies: 'usd'
-      },
-      timeout: 5000
-    });
+    // Try Jupiter price API first (more reliable for crypto prices)
+    try {
+      const jupiterResponse = await axios.get('https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112', {
+        timeout: 5000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json'
+        }
+      });
 
-    if (response.data?.solana?.usd) {
-      return response.data.solana.usd;
+      if (jupiterResponse.data?.data?.So11111111111111111111111111111111111111112?.price) {
+        return jupiterResponse.data.data.So11111111111111111111111111111111111111112.price;
+      }
+    } catch (jupErr) {
+      // Try fallback
     }
 
-    // Fallback: Try Jupiter price API
-    const jupiterResponse = await axios.get('https://price.jup.ag/v4/price?ids=So11111111111111111111111111111111111111112', {
-      timeout: 5000
-    });
+    // Fallback: Try CoinGecko (free tier)
+    try {
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
+        params: {
+          ids: 'solana',
+          vs_currencies: 'usd'
+        },
+        timeout: 5000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json'
+        }
+      });
 
-    if (jupiterResponse.data?.data?.So11111111111111111111111111111111111111112?.price) {
-      return jupiterResponse.data.data.So11111111111111111111111111111111111111112.price;
+      if (response.data?.solana?.usd) {
+        return response.data.solana.usd;
+      }
+    } catch (cgErr) {
+      // Continue to manual fallback
     }
 
-    return null;
+    // If all APIs fail, use approximate price (update manually or use last known)
+    console.log(`   ⚠️  API price fetch failed, using estimated SOL price`);
+    return LIVE_DATA.solPrice || 110; // Use cached price or default estimate
   } catch (error) {
     console.log(`   Failed to fetch SOL price: ${error.message}`);
-    return null;
+    return LIVE_DATA.solPrice || 110; // Fallback to approximate current price
   }
 }
 
@@ -101,6 +119,14 @@ async function fetchBondingCurveData() {
 
 // Update live market data (call every 5 minutes)
 async function updateLiveMarketData() {
+  // Only update if we don't have recent data (within 5 min)
+  if (LIVE_DATA.lastUpdate) {
+    const timeSinceUpdate = Date.now() - new Date(LIVE_DATA.lastUpdate).getTime();
+    if (timeSinceUpdate < 5 * 60 * 1000) {
+      return; // Skip if updated within last 5 minutes
+    }
+  }
+
   await fetchBondingCurveData();
 }
 
