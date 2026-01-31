@@ -29,6 +29,81 @@ const SCANNER_CONFIG = {
   TOKENS_PER_SCAN: 500        // Check 500 tokens per scan (5 pages of 100)
 };
 
+// Real-time market data cache
+let LIVE_DATA = {
+  solPrice: null,
+  bondingThreshold: null,
+  lastUpdate: null
+};
+
+// Fetch real-time SOL price from multiple sources
+async function fetchLiveSOLPrice() {
+  try {
+    // Try CoinGecko first (free, reliable)
+    const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
+      params: {
+        ids: 'solana',
+        vs_currencies: 'usd'
+      },
+      timeout: 5000
+    });
+
+    if (response.data?.solana?.usd) {
+      return response.data.solana.usd;
+    }
+
+    // Fallback: Try Jupiter price API
+    const jupiterResponse = await axios.get('https://price.jup.ag/v4/price?ids=So11111111111111111111111111111111111111112', {
+      timeout: 5000
+    });
+
+    if (jupiterResponse.data?.data?.So11111111111111111111111111111111111111112?.price) {
+      return jupiterResponse.data.data.So11111111111111111111111111111111111111112.price;
+    }
+
+    return null;
+  } catch (error) {
+    console.log(`   Failed to fetch SOL price: ${error.message}`);
+    return null;
+  }
+}
+
+// Fetch pump.fun bonding curve data
+async function fetchBondingCurveData() {
+  try {
+    // Pump.fun bonding curve requires 85 SOL to graduate
+    // This is hardcoded in their smart contract
+    const BONDING_CURVE_SOL = 85;
+
+    // Get current SOL price
+    const solPrice = await fetchLiveSOLPrice();
+
+    if (solPrice) {
+      const graduationMC = BONDING_CURVE_SOL * solPrice;
+      LIVE_DATA.solPrice = solPrice;
+      LIVE_DATA.bondingThreshold = graduationMC;
+      LIVE_DATA.lastUpdate = new Date().toISOString();
+
+      console.log(`\n💰 Live Market Data Updated:`);
+      console.log(`   SOL Price: $${solPrice.toFixed(2)}`);
+      console.log(`   Graduation MC: $${graduationMC.toFixed(0)} (${BONDING_CURVE_SOL} SOL)`);
+      console.log(`   Updated: ${new Date().toLocaleTimeString()}\n`);
+
+      return { solPrice, graduationMC };
+    }
+
+    return null;
+  } catch (error) {
+    console.log(`   Failed to fetch bonding curve data: ${error.message}`);
+    return null;
+  }
+}
+
+// Update live market data (call every 5 minutes)
+async function updateLiveMarketData() {
+  await fetchBondingCurveData();
+}
+
 // Auto-scanner state
 let scannerInterval = null;
 let scannerRunning = false;
@@ -673,6 +748,9 @@ async function meetsAutoPostCriteria(tokenData) {
 async function runScanCycle() {
   console.log('\n🔍 Scanning existing pump.fun tokens...');
 
+  // Update live market data first
+  await updateLiveMarketData();
+
   try {
     const tokens = await fetchPumpFunTokens();
     console.log(`   Total tokens fetched: ${tokens.length}`);
@@ -733,6 +811,12 @@ async function runScanCycle() {
     console.log(`   MC $${SCANNER_CONFIG.MIN_MARKET_CAP}+: ${passedMC}`);
     console.log(`   Age ${SCANNER_CONFIG.MIN_AGE_HOURS}h-${SCANNER_CONFIG.MAX_AGE_DAYS}d: ${passedAge}`);
     console.log(`   Posted: ${posted}`);
+
+    if (LIVE_DATA.solPrice && LIVE_DATA.bondingThreshold) {
+      console.log(`\n💰 Current Market:`);
+      console.log(`   SOL: $${LIVE_DATA.solPrice.toFixed(2)}`);
+      console.log(`   Graduation MC: $${LIVE_DATA.bondingThreshold.toFixed(0)}`);
+    }
   } catch (error) {
     console.log('Error in scan cycle:', error.message);
   }
@@ -913,6 +997,12 @@ bot.onText(/\/help/, (msg) => {
   • Scans pump.fun launches every 5 minutes
   • Posts tokens with TikTok links
   • Filters by MC, volume, and age
+
+*Market Data:*
+/marketdata - Live SOL price & bonding curve info
+  • Current SOL price
+  • Graduation threshold ($)
+  • Updated in real-time
 
 *Tracker Commands:*
 /add <symbol> <CA> - Add to your tracker
@@ -1096,6 +1186,39 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
       `• \`/autoscan config\` - Configure settings`,
       { parse_mode: 'Markdown' }
     );
+  }
+});
+
+// /marketdata command - Show live SOL price and bonding curve data
+bot.onText(/\/marketdata/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  try {
+    // Fetch fresh data
+    const data = await fetchBondingCurveData();
+
+    if (!data) {
+      bot.sendMessage(chatId, '❌ Failed to fetch live market data. Try again in a moment.');
+      return;
+    }
+
+    const { solPrice, graduationMC } = data;
+
+    bot.sendMessage(chatId,
+      `💰 *Live Market Data*\n\n` +
+      `*Solana (SOL):*\n` +
+      `• Current Price: $${solPrice.toFixed(2)}\n\n` +
+      `*Pump.fun Bonding Curve:*\n` +
+      `• Graduation Threshold: 85 SOL\n` +
+      `• Graduation MC: $${graduationMC.toFixed(0).toLocaleString()}\n` +
+      `• Graduates to: PumpSwap DEX\n\n` +
+      `*What this means:*\n` +
+      `When a pump.fun token raises 85 SOL through its bonding curve, it graduates to PumpSwap with full liquidity.\n\n` +
+      `Last updated: ${new Date().toLocaleString()}`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    bot.sendMessage(chatId, '❌ Error fetching market data: ' + error.message);
   }
 });
 
