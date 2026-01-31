@@ -581,7 +581,9 @@ async function fetchPumpFunTokens() {
     for (let page = 0; page < pagesToFetch; page++) {
       const offset = page * tokensPerPage;
 
-      const response = await axios.get('https://frontend-api-v3.pump.fun/coins/currently-live', {
+      // Use search endpoint with sort by creation date to get recent tokens
+      // Filter for graduated tokens (complete: true means on Raydium/PumpSwap)
+      const response = await axios.get('https://frontend-api-v3.pump.fun/coins/search', {
         timeout: 15000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -590,13 +592,20 @@ async function fetchPumpFunTokens() {
         },
         params: {
           limit: tokensPerPage,
-          offset: offset
+          offset: offset,
+          sort: 'created_timestamp',
+          order: 'DESC',
+          includeNsfw: false
         }
       });
 
       if (response.data && Array.isArray(response.data)) {
-        allTokens.push(...response.data);
-        console.log(`   Page ${page + 1}/${pagesToFetch}: ${response.data.length} tokens`);
+        // Filter for PumpSwap or bonding curve tokens (NOT Raydium)
+        const pumpTokens = response.data.filter(token =>
+          token.pump_swap_pool || (!token.raydium_pool && !token.complete)
+        );
+        allTokens.push(...pumpTokens);
+        console.log(`   Page ${page + 1}/${pagesToFetch}: ${pumpTokens.length}/${response.data.length} pump tokens (PumpSwap or bonding curve)`);
       }
 
       // Small delay between requests to avoid rate limiting
@@ -605,6 +614,7 @@ async function fetchPumpFunTokens() {
       }
     }
 
+    console.log(`   Total graduated tokens: ${allTokens.length}`);
     return allTokens;
   } catch (error) {
     console.log('Error fetching pump.fun tokens:', error.message);
