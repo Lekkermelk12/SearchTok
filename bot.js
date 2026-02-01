@@ -699,6 +699,10 @@ async function fetchPumpFunTokens() {
         // Add ALL tokens from pump.fun - no filtering by graduation status
         allTokens.push(...response.data);
         console.log(`   Page ${page + 1}/${pagesToFetch}: ${response.data.length} tokens fetched`);
+      } else {
+        console.log(`   Page ${page + 1}/${pagesToFetch}: API returned non-array data`);
+        console.log(`   Response type: ${typeof response.data}`);
+        console.log(`   Response keys: ${response.data ? Object.keys(response.data).join(', ') : 'null'}`);
       }
 
       // Small delay between requests to avoid rate limiting
@@ -710,7 +714,11 @@ async function fetchPumpFunTokens() {
     console.log(`   Total pump.fun tokens found: ${allTokens.length}`);
     return allTokens;
   } catch (error) {
-    console.log('Error fetching pump.fun tokens:', error.message);
+    console.log('❌ Error fetching pump.fun tokens:', error.message);
+    if (error.response) {
+      console.log(`   HTTP Status: ${error.response.status}`);
+      console.log(`   Response: ${JSON.stringify(error.response.data).substring(0, 200)}`);
+    }
     return [];
   }
 }
