@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs').promises;
 const path = require('path');
