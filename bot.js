@@ -7,20 +7,19 @@ const cheerio = require('cheerio');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const channelId = process.env.CHANNEL_ID || '-1003864629972';
-const moralisApiKey = process.env.MORALIS_API_KEY;
+const solscanApiKey = process.env.SOLSCAN_API_KEY;
 
 if (!token) {
   console.error('Error: TELEGRAM_BOT_TOKEN is not set in .env file');
   process.exit(1);
 }
 
-if (!moralisApiKey || moralisApiKey === 'your_moralis_api_key_here') {
-  console.error('⚠️  Warning: MORALIS_API_KEY is not set in .env file');
-  console.error('   Get a free API key at https://moralis.io');
+if (!solscanApiKey || solscanApiKey === 'your_solscan_api_key_here') {
+  console.error('⚠️  Warning: SOLSCAN_API_KEY is not set in .env file');
+  console.error('   Get a free API key at https://solscan.io/apis');
   console.error('   Scanner will not work without it!');
-  console.error(`   DEBUG: API key value = "${moralisApiKey}" (length: ${moralisApiKey ? moralisApiKey.length : 0})`);
 } else {
-  console.log('✅ Moralis API key loaded successfully');
+  console.log('✅ Solscan API key loaded successfully');
 }
 
 const bot = new TelegramBot(token, { polling: true });
@@ -30,13 +29,13 @@ const POSTED_TOKENS_FILE = path.join(__dirname, 'posted_tokens.json');
 
 // Auto-scanner configuration
 const SCANNER_CONFIG = {
-  MIN_MARKET_CAP: 12000,      // $12K minimum (pump.fun data)
-  MIN_VOLUME_24H: 10000,      // NOT USED (pump.fun API doesn't provide volume)
-  MIN_AGE_HOURS: 0.42,        // At least 25 minutes old (0.42 hours)
-  MAX_AGE_DAYS: 7,            // Max 7 days old
-  SCAN_INTERVAL: 2 * 60 * 1000, // Check every 2 minutes (faster scanning)
-  REQUIRE_TIKTOK: true,       // Must have TikTok link (twitter/telegram/website fields)
-  TOKENS_PER_SCAN: 500        // Check 500 tokens per scan (5 pages of 100)
+  MIN_MARKET_CAP: 12000,      // $12K minimum (Solscan filters this in Stage 1)
+  MAX_MARKET_CAP: 250000,     // $250K maximum (Solscan filters this in Stage 1)
+  MIN_AGE_HOURS: 0,           // Minimum age (0 = no minimum, Solscan filters 1 day max)
+  MAX_AGE_DAYS: 1,            // Max 1 day old (hardcoded in Stage 1 Solscan filter)
+  SCAN_INTERVAL: 5 * 60 * 1000, // Check every 5 minutes (conservative to save API calls)
+  REQUIRE_TIKTOK: true,       // Must have TikTok link (GMGN.ai checks in Stage 2)
+  TOKENS_PER_SCAN: 100        // Fetch 100 tokens from Solscan per scan
 };
 
 // Real-time market data cache
@@ -675,83 +674,144 @@ function formatTokenData(result, contractAddress) {
 
 // ============= AUTO-SCANNER FUNCTIONS =============
 
-// Fetch existing tokens from Moralis API (pump.fun data)
+// Check GMGN.ai for TikTok links (Stage 2)
+async function checkGMGNForTikTok(contractAddress) {
+  try {
+    const response = await axios.get(`https://gmgn.ai/defi/quotation/v1/tokens/sol/${contractAddress}`, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json'
+      }
+    });
+
+    if (response.data && response.data.data) {
+      const tokenData = response.data.data;
+
+      // Check for TikTok in various social fields
+      const socials = tokenData.socials || {};
+      const twitter = socials.twitter || '';
+      const telegram = socials.telegram || '';
+      const website = socials.website || '';
+      const discord = socials.discord || '';
+
+      const hasTikTok =
+        twitter.includes('tiktok.com') ||
+        telegram.includes('tiktok.com') ||
+        website.includes('tiktok.com') ||
+        discord.includes('tiktok.com');
+
+      return {
+        hasTikTok,
+        socials: {
+          twitter: socials.twitter || null,
+          telegram: socials.telegram || null,
+          website: socials.website || null
+        }
+      };
+    }
+
+    return { hasTikTok: false, socials: {} };
+  } catch (error) {
+    // Silently fail for gmgn checks (token might not be indexed yet)
+    return { hasTikTok: false, socials: {} };
+  }
+}
+
+// STAGE 1: Fetch tokens from Solscan API (primary filter)
 async function fetchPumpFunTokens() {
   try {
-    if (!moralisApiKey || moralisApiKey === 'your_moralis_api_key_here') {
-      console.log('❌ Moralis API key not configured. Cannot fetch tokens.');
+    if (!solscanApiKey || solscanApiKey === 'your_solscan_api_key_here') {
+      console.log('❌ Solscan API key not configured. Cannot fetch tokens.');
       return [];
     }
 
-    const allTokens = [];
-    let cursor = null;
-    const limit = 100; // Moralis allows up to 100 per request
-    const maxTokens = SCANNER_CONFIG.TOKENS_PER_SCAN;
+    console.log(`   📡 STAGE 1: Fetching pump.fun tokens from Solscan...`);
 
-    console.log(`   Fetching up to ${maxTokens} tokens from Moralis API...`);
+    const response = await axios.get('https://pro-api.solscan.io/v2.0/token/latest', {
+      headers: {
+        'token': solscanApiKey,
+        'Accept': 'application/json'
+      },
+      params: {
+        platform_id: 'pumpfun',
+        limit: SCANNER_CONFIG.TOKENS_PER_SCAN || 100
+      },
+      timeout: 15000
+    });
 
-    // Fetch tokens in batches
-    while (allTokens.length < maxTokens) {
-      const params = {
-        network: 'mainnet',
-        exchange: 'pump',
-        limit: Math.min(limit, maxTokens - allTokens.length)
-      };
-
-      if (cursor) {
-        params.cursor = cursor;
-      }
-
-      const response = await axios.get('https://solana-gateway.moralis.io/token/mainnet/pumpfun/pairs', {
-        headers: {
-          'Accept': 'application/json',
-          'X-API-Key': moralisApiKey
-        },
-        params: params,
-        timeout: 15000
-      });
-
-      if (response.data?.result && Array.isArray(response.data.result)) {
-        const tokens = response.data.result;
-
-        // Convert Moralis format to our format
-        const convertedTokens = tokens.map(token => ({
-          mint: token.tokenAddress || token.address,
-          name: token.tokenName || token.name || 'Unknown',
-          symbol: token.tokenSymbol || token.symbol || '???',
-          market_cap: token.marketCap || token.fdv || 0,
-          usd_market_cap: token.marketCap || token.fdv || 0,
-          created_timestamp: token.createdAt || token.pairCreatedAt || Date.now(),
-          twitter: token.info?.socials?.find(s => s.type === 'twitter')?.url || null,
-          telegram: token.info?.socials?.find(s => s.type === 'telegram')?.url || null,
-          website: token.info?.websites?.[0] || null,
-          image_uri: token.info?.imageUrl || null,
-          complete: token.graduated || false,
-          pump_swap_pool: token.dexId === 'pumpswap' || null,
-          raydium_pool: token.dexId === 'raydium' || null
-        }));
-
-        allTokens.push(...convertedTokens);
-        console.log(`   Fetched ${tokens.length} tokens (Total: ${allTokens.length})`);
-
-        // Check if there's more data
-        cursor = response.data.cursor;
-        if (!cursor || allTokens.length >= maxTokens) {
-          break;
-        }
-
-        // Small delay between requests
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } else {
-        console.log('   API returned unexpected format');
-        break;
-      }
+    if (!response.data || !Array.isArray(response.data.data)) {
+      console.log('   ❌ Unexpected API response format');
+      return [];
     }
 
-    console.log(`   Total pump.fun tokens found: ${allTokens.length}`);
-    return allTokens;
+    const rawTokens = response.data.data;
+    console.log(`   ✅ Fetched ${rawTokens.length} raw tokens from Solscan`);
+
+    // Filter by age and MC (Stage 1 filtering)
+    const now = Date.now();
+    const oneDayAgo = now - (24 * 60 * 60 * 1000);
+
+    const filtered = rawTokens.filter(token => {
+      const createdTime = token.created_time ? token.created_time * 1000 : now;
+      const marketCap = token.market_cap || token.market_cap_usd || 0;
+
+      // Age: 1 day old max
+      if (createdTime < oneDayAgo) return false;
+
+      // MC: $12K - $250K
+      if (marketCap < 12000 || marketCap > 250000) return false;
+
+      return true;
+    });
+
+    console.log(`   ✅ Filtered to ${filtered.length} tokens (1 day old, $12K-$250K MC)`);
+
+    // Convert to standard format
+    const convertedTokens = filtered.map(token => ({
+      mint: token.address,
+      name: token.name || 'Unknown',
+      symbol: token.symbol || '???',
+      market_cap: token.market_cap || token.market_cap_usd || 0,
+      usd_market_cap: token.market_cap || token.market_cap_usd || 0,
+      created_timestamp: token.created_time ? token.created_time * 1000 : now,
+      decimals: token.decimals || 9,
+      holder: token.holder || 0,
+      twitter: null,  // Will be filled from GMGN
+      telegram: null,
+      website: null,
+      image_uri: token.icon || null
+    }));
+
+    // STAGE 2: Check each token on GMGN.ai for TikTok links
+    console.log(`   🔍 STAGE 2: Checking GMGN.ai for TikTok links...`);
+
+    const tokensWithTikTok = [];
+    for (let i = 0; i < convertedTokens.length; i++) {
+      const token = convertedTokens[i];
+
+      const gmgnData = await checkGMGNForTikTok(token.mint);
+
+      if (gmgnData.hasTikTok) {
+        // Add social data from GMGN
+        token.twitter = gmgnData.socials.twitter;
+        token.telegram = gmgnData.socials.telegram;
+        token.website = gmgnData.socials.website;
+        tokensWithTikTok.push(token);
+        console.log(`   ✅ [${i + 1}/${convertedTokens.length}] ${token.symbol} - HAS TikTok link`);
+      } else {
+        console.log(`   ⏭️  [${i + 1}/${convertedTokens.length}] ${token.symbol} - No TikTok`);
+      }
+
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    console.log(`   🎯 Found ${tokensWithTikTok.length} tokens with TikTok links!`);
+    return tokensWithTikTok;
+
   } catch (error) {
-    console.log('❌ Error fetching pump.fun tokens from Moralis:', error.message);
+    console.log('❌ Error fetching pump.fun tokens from Solscan:', error.message);
     if (error.response) {
       console.log(`   HTTP Status: ${error.response.status}`);
       console.log(`   Response: ${JSON.stringify(error.response.data).substring(0, 300)}`);
