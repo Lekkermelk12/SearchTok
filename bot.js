@@ -102,11 +102,6 @@ async function fetchBondingCurveData() {
       LIVE_DATA.bondingThreshold = graduationMC;
       LIVE_DATA.lastUpdate = new Date().toISOString();
 
-      console.log(`\n💰 Live Market Data Updated:`);
-      console.log(`   SOL Price: $${solPrice.toFixed(2)}`);
-      console.log(`   Graduation MC: $${graduationMC.toFixed(0)} (${BONDING_CURVE_SOL} SOL)`);
-      console.log(`   Updated: ${new Date().toLocaleTimeString()}\n`);
-
       return { solPrice, graduationMC };
     }
 
@@ -701,12 +696,9 @@ async function fetchPumpFunTokens() {
       });
 
       if (response.data && Array.isArray(response.data)) {
-        // Filter for PumpSwap tokens OR bonding curve tokens from pump.fun
-        const pumpTokens = response.data.filter(token =>
-          token.pump_swap_pool || !token.complete
-        );
-        allTokens.push(...pumpTokens);
-        console.log(`   Page ${page + 1}/${pagesToFetch}: ${pumpTokens.length}/${response.data.length} pump.fun tokens (PumpSwap or bonding curve)`);
+        // Add ALL tokens from pump.fun - no filtering by graduation status
+        allTokens.push(...response.data);
+        console.log(`   Page ${page + 1}/${pagesToFetch}: ${response.data.length} tokens fetched`);
       }
 
       // Small delay between requests to avoid rate limiting
@@ -774,9 +766,6 @@ async function meetsAutoPostCriteria(tokenData) {
 async function runScanCycle() {
   console.log('\n🔍 Scanning existing pump.fun tokens...');
 
-  // Update live market data first
-  await updateLiveMarketData();
-
   try {
     const tokens = await fetchPumpFunTokens();
     console.log(`   Total tokens fetched: ${tokens.length}`);
@@ -837,12 +826,6 @@ async function runScanCycle() {
     console.log(`   MC $${SCANNER_CONFIG.MIN_MARKET_CAP}+: ${passedMC}`);
     console.log(`   Age ${SCANNER_CONFIG.MIN_AGE_HOURS}h-${SCANNER_CONFIG.MAX_AGE_DAYS}d: ${passedAge}`);
     console.log(`   Posted: ${posted}`);
-
-    if (LIVE_DATA.solPrice && LIVE_DATA.bondingThreshold) {
-      console.log(`\n💰 Current Market:`);
-      console.log(`   SOL: $${LIVE_DATA.solPrice.toFixed(2)}`);
-      console.log(`   Graduation MC: $${LIVE_DATA.bondingThreshold.toFixed(0)}`);
-    }
   } catch (error) {
     console.log('Error in scan cycle:', error.message);
   }
