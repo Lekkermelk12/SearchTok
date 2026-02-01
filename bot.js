@@ -7,10 +7,17 @@ const cheerio = require('cheerio');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const channelId = process.env.CHANNEL_ID || '-1003864629972';
+const moralisApiKey = process.env.MORALIS_API_KEY;
 
 if (!token) {
   console.error('Error: TELEGRAM_BOT_TOKEN is not set in .env file');
   process.exit(1);
+}
+
+if (!moralisApiKey || moralisApiKey === 'your_moralis_api_key_here') {
+  console.error('⚠️  Warning: MORALIS_API_KEY is not set in .env file');
+  console.error('   Get a free API key at https://moralis.io');
+  console.error('   Scanner will not work without it!');
 }
 
 const bot = new TelegramBot(token, { polling: true });
@@ -665,59 +672,86 @@ function formatTokenData(result, contractAddress) {
 
 // ============= AUTO-SCANNER FUNCTIONS =============
 
-// Fetch existing tokens from pump.fun API with pagination
+// Fetch existing tokens from Moralis API (pump.fun data)
 async function fetchPumpFunTokens() {
   try {
+    if (!moralisApiKey || moralisApiKey === 'your_moralis_api_key_here') {
+      console.log('❌ Moralis API key not configured. Cannot fetch tokens.');
+      return [];
+    }
+
     const allTokens = [];
-    const tokensPerPage = 100;
-    const pagesToFetch = Math.ceil(SCANNER_CONFIG.TOKENS_PER_SCAN / tokensPerPage);
+    let cursor = null;
+    const limit = 100; // Moralis allows up to 100 per request
+    const maxTokens = SCANNER_CONFIG.TOKENS_PER_SCAN;
 
-    console.log(`   Fetching ${pagesToFetch} pages (${SCANNER_CONFIG.TOKENS_PER_SCAN} tokens total)...`);
+    console.log(`   Fetching up to ${maxTokens} tokens from Moralis API...`);
 
-    for (let page = 0; page < pagesToFetch; page++) {
-      const offset = page * tokensPerPage;
+    // Fetch tokens in batches
+    while (allTokens.length < maxTokens) {
+      const params = {
+        network: 'mainnet',
+        exchange: 'pump',
+        limit: Math.min(limit, maxTokens - allTokens.length)
+      };
 
-      // Use search endpoint with sort by creation date to get recent tokens
-      // Filter for graduated tokens (complete: true means on Raydium/PumpSwap)
-      const response = await axios.get('https://frontend-api-v3.pump.fun/coins/search', {
-        timeout: 15000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'application/json',
-          'Referer': 'https://pump.fun/'
-        },
-        params: {
-          limit: tokensPerPage,
-          offset: offset,
-          sort: 'created_timestamp',
-          order: 'DESC',
-          includeNsfw: false
-        }
-      });
-
-      if (response.data && Array.isArray(response.data)) {
-        // Add ALL tokens from pump.fun - no filtering by graduation status
-        allTokens.push(...response.data);
-        console.log(`   Page ${page + 1}/${pagesToFetch}: ${response.data.length} tokens fetched`);
-      } else {
-        console.log(`   Page ${page + 1}/${pagesToFetch}: API returned non-array data`);
-        console.log(`   Response type: ${typeof response.data}`);
-        console.log(`   Response keys: ${response.data ? Object.keys(response.data).join(', ') : 'null'}`);
+      if (cursor) {
+        params.cursor = cursor;
       }
 
-      // Small delay between requests to avoid rate limiting
-      if (page < pagesToFetch - 1) {
+      const response = await axios.get('https://solana-gateway.moralis.io/token/mainnet/pumpfun/pairs', {
+        headers: {
+          'Accept': 'application/json',
+          'X-API-Key': moralisApiKey
+        },
+        params: params,
+        timeout: 15000
+      });
+
+      if (response.data?.result && Array.isArray(response.data.result)) {
+        const tokens = response.data.result;
+
+        // Convert Moralis format to our format
+        const convertedTokens = tokens.map(token => ({
+          mint: token.tokenAddress || token.address,
+          name: token.tokenName || token.name || 'Unknown',
+          symbol: token.tokenSymbol || token.symbol || '???',
+          market_cap: token.marketCap || token.fdv || 0,
+          usd_market_cap: token.marketCap || token.fdv || 0,
+          created_timestamp: token.createdAt || token.pairCreatedAt || Date.now(),
+          twitter: token.info?.socials?.find(s => s.type === 'twitter')?.url || null,
+          telegram: token.info?.socials?.find(s => s.type === 'telegram')?.url || null,
+          website: token.info?.websites?.[0] || null,
+          image_uri: token.info?.imageUrl || null,
+          complete: token.graduated || false,
+          pump_swap_pool: token.dexId === 'pumpswap' || null,
+          raydium_pool: token.dexId === 'raydium' || null
+        }));
+
+        allTokens.push(...convertedTokens);
+        console.log(`   Fetched ${tokens.length} tokens (Total: ${allTokens.length})`);
+
+        // Check if there's more data
+        cursor = response.data.cursor;
+        if (!cursor || allTokens.length >= maxTokens) {
+          break;
+        }
+
+        // Small delay between requests
         await new Promise(resolve => setTimeout(resolve, 500));
+      } else {
+        console.log('   API returned unexpected format');
+        break;
       }
     }
 
     console.log(`   Total pump.fun tokens found: ${allTokens.length}`);
     return allTokens;
   } catch (error) {
-    console.log('❌ Error fetching pump.fun tokens:', error.message);
+    console.log('❌ Error fetching pump.fun tokens from Moralis:', error.message);
     if (error.response) {
       console.log(`   HTTP Status: ${error.response.status}`);
-      console.log(`   Response: ${JSON.stringify(error.response.data).substring(0, 200)}`);
+      console.log(`   Response: ${JSON.stringify(error.response.data).substring(0, 300)}`);
     }
     return [];
   }
