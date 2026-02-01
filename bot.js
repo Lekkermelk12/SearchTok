@@ -18,6 +18,9 @@ if (!moralisApiKey || moralisApiKey === 'your_moralis_api_key_here') {
   console.error('⚠️  Warning: MORALIS_API_KEY is not set in .env file');
   console.error('   Get a free API key at https://moralis.io');
   console.error('   Scanner will not work without it!');
+  console.error(`   DEBUG: API key value = "${moralisApiKey}" (length: ${moralisApiKey ? moralisApiKey.length : 0})`);
+} else {
+  console.log('✅ Moralis API key loaded successfully');
 }
 
 const bot = new TelegramBot(token, { polling: true });
