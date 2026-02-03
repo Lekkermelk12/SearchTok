@@ -9,6 +9,10 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 const channelId = process.env.CHANNEL_ID || '-1003864629972';
 const solscanApiKey = process.env.SOLSCAN_API_KEY;
 
+console.log('🔍 DEBUG: Checking API keys...');
+console.log('   TELEGRAM_BOT_TOKEN:', token ? 'LOADED' : 'MISSING');
+console.log('   SOLSCAN_API_KEY:', solscanApiKey ? `${solscanApiKey.substring(0, 30)}... (${solscanApiKey.length} chars)` : 'MISSING');
+
 if (!token) {
   console.error('Error: TELEGRAM_BOT_TOKEN is not set in .env file');
   process.exit(1);
