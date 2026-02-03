@@ -742,6 +742,20 @@ async function fetchPumpFunTokens() {
 
     console.log(`   ✅ Found ${pumpFunPairs.length} pump.fun pairs`);
 
+    // DEBUG: Show first 3 pairs to understand data format
+    console.log(`\n🔍 DEBUG: Showing first 3 pairs to check data format:`);
+    for (let i = 0; i < Math.min(3, pumpFunPairs.length); i++) {
+      const pair = pumpFunPairs[i];
+      const createdTime = pair.pairCreatedAt || 0;
+      const marketCap = pair.fdv || pair.marketCap || 0;
+      const ageHours = (Date.now() - createdTime) / (1000 * 60 * 60);
+      console.log(`   [${i + 1}] ${pair.baseToken?.symbol || '???'}`);
+      console.log(`       MC: $${marketCap.toLocaleString()}`);
+      console.log(`       Age: ${ageHours > 24 ? (ageHours / 24).toFixed(1) + ' days' : ageHours.toFixed(1) + ' hours'}`);
+      console.log(`       Created: ${createdTime ? new Date(createdTime).toISOString() : 'N/A'}`);
+    }
+    console.log('');
+
     // Filter by age and MC (Stage 1 filtering)
     const now = Date.now();
     const oneDayAgo = now - (24 * 60 * 60 * 1000);
