@@ -7,24 +7,13 @@ const cheerio = require('cheerio');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const channelId = process.env.CHANNEL_ID || '-1003864629972';
-const solscanApiKey = process.env.SOLSCAN_API_KEY;
-
-console.log('🔍 DEBUG: Checking API keys...');
-console.log('   TELEGRAM_BOT_TOKEN:', token ? 'LOADED' : 'MISSING');
-console.log('   SOLSCAN_API_KEY:', solscanApiKey ? `${solscanApiKey.substring(0, 30)}... (${solscanApiKey.length} chars)` : 'MISSING');
 
 if (!token) {
   console.error('Error: TELEGRAM_BOT_TOKEN is not set in .env file');
   process.exit(1);
 }
 
-if (!solscanApiKey || solscanApiKey === 'your_solscan_api_key_here') {
-  console.error('⚠️  Warning: SOLSCAN_API_KEY is not set in .env file');
-  console.error('   Get a free API key at https://solscan.io/apis');
-  console.error('   Scanner will not work without it!');
-} else {
-  console.log('✅ Solscan API key loaded successfully');
-}
+console.log('✅ Bot initialized - using DexScreener API (no API key needed!)');
 
 const bot = new TelegramBot(token, { polling: true });
 const DATA_FILE = path.join(__dirname, 'memecoins.json');
@@ -722,43 +711,44 @@ async function checkGMGNForTikTok(contractAddress) {
   }
 }
 
-// STAGE 1: Fetch tokens from Solscan API (primary filter)
+// STAGE 1: Fetch tokens from DexScreener API (primary filter - FREE, no API key!)
 async function fetchPumpFunTokens() {
   try {
-    if (!solscanApiKey || solscanApiKey === 'your_solscan_api_key_here') {
-      console.log('❌ Solscan API key not configured. Cannot fetch tokens.');
-      return [];
-    }
+    console.log(`   📡 STAGE 1: Fetching pump.fun tokens from DexScreener...`);
 
-    console.log(`   📡 STAGE 1: Fetching pump.fun tokens from Solscan...`);
-
-    const response = await axios.get('https://pro-api.solscan.io/v2.0/token/latest', {
+    // DexScreener search for pump.fun tokens
+    const response = await axios.get('https://api.dexscreener.com/latest/dex/search/?q=pump.fun', {
+      timeout: 15000,
       headers: {
-        'token': solscanApiKey,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json'
-      },
-      params: {
-        platform_id: 'pumpfun',
-        limit: SCANNER_CONFIG.TOKENS_PER_SCAN || 100
-      },
-      timeout: 15000
+      }
     });
 
-    if (!response.data || !Array.isArray(response.data.data)) {
+    if (!response.data || !Array.isArray(response.data.pairs)) {
       console.log('   ❌ Unexpected API response format');
       return [];
     }
 
-    const rawTokens = response.data.data;
-    console.log(`   ✅ Fetched ${rawTokens.length} raw tokens from Solscan`);
+    const allPairs = response.data.pairs || [];
+    console.log(`   ✅ Fetched ${allPairs.length} pairs from DexScreener`);
+
+    // Filter for pump.fun tokens only
+    const pumpFunPairs = allPairs.filter(pair => {
+      const dexId = (pair.dexId || '').toLowerCase();
+      const url = (pair.url || '').toLowerCase();
+      return dexId.includes('pump') || url.includes('pump.fun');
+    });
+
+    console.log(`   ✅ Found ${pumpFunPairs.length} pump.fun pairs`);
 
     // Filter by age and MC (Stage 1 filtering)
     const now = Date.now();
     const oneDayAgo = now - (24 * 60 * 60 * 1000);
 
-    const filtered = rawTokens.filter(token => {
-      const createdTime = token.created_time ? token.created_time * 1000 : now;
-      const marketCap = token.market_cap || token.market_cap_usd || 0;
+    const filtered = pumpFunPairs.filter(pair => {
+      const createdTime = pair.pairCreatedAt || 0;
+      const marketCap = pair.fdv || pair.marketCap || 0;
 
       // Age: 1 day old max
       if (createdTime < oneDayAgo) return false;
@@ -772,19 +762,19 @@ async function fetchPumpFunTokens() {
     console.log(`   ✅ Filtered to ${filtered.length} tokens (1 day old, $12K-$250K MC)`);
 
     // Convert to standard format
-    const convertedTokens = filtered.map(token => ({
-      mint: token.address,
-      name: token.name || 'Unknown',
-      symbol: token.symbol || '???',
-      market_cap: token.market_cap || token.market_cap_usd || 0,
-      usd_market_cap: token.market_cap || token.market_cap_usd || 0,
-      created_timestamp: token.created_time ? token.created_time * 1000 : now,
-      decimals: token.decimals || 9,
-      holder: token.holder || 0,
-      twitter: null,  // Will be filled from GMGN
-      telegram: null,
-      website: null,
-      image_uri: token.icon || null
+    const convertedTokens = filtered.map(pair => ({
+      mint: pair.baseToken?.address || pair.tokenAddress,
+      name: pair.baseToken?.name || 'Unknown',
+      symbol: pair.baseToken?.symbol || '???',
+      market_cap: pair.fdv || pair.marketCap || 0,
+      usd_market_cap: pair.fdv || pair.marketCap || 0,
+      created_timestamp: pair.pairCreatedAt || now,
+      decimals: 9,
+      holder: 0,
+      twitter: pair.info?.socials?.find(s => s.type === 'twitter')?.url || null,
+      telegram: pair.info?.socials?.find(s => s.type === 'telegram')?.url || null,
+      website: pair.info?.websites?.[0] || null,
+      image_uri: pair.info?.imageUrl || null
     }));
 
     // STAGE 2: Check each token on GMGN.ai for TikTok links
@@ -815,7 +805,7 @@ async function fetchPumpFunTokens() {
     return tokensWithTikTok;
 
   } catch (error) {
-    console.log('❌ Error fetching pump.fun tokens from Solscan:', error.message);
+    console.log('❌ Error fetching pump.fun tokens from DexScreener:', error.message);
     if (error.response) {
       console.log(`   HTTP Status: ${error.response.status}`);
       console.log(`   Response: ${JSON.stringify(error.response.data).substring(0, 300)}`);
