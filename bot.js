@@ -665,9 +665,10 @@ function formatTokenData(result, contractAddress) {
 function formatTweet(formatted, contractAddress) {
   const { name, symbol } = formatted;
 
-  // New simple format matching Telegram
-  let tweet = `${name} just got listed on NicheScout lol\n\n`;
-  tweet += `${symbol} ${contractAddress}`;
+  // Format: (name) (ticker) has been posted on nichescout lol
+  let tweet = `${name} (${symbol}) has been posted on nichescout lol\n\n`;
+  tweet += `${contractAddress}\n\n`;
+  tweet += `join for tiktok coin alerts t.me/nichescout`;
 
   return tweet;
 }
