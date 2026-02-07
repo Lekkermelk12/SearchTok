@@ -942,6 +942,22 @@ async function queueTokenForProcessing(tokenData) {
       return;
     }
 
+    // Skip if a token with the same name or ticker is already queued (anti-spam)
+    const tokenName = tokenData.name?.trim().toLowerCase();
+    const tokenSymbol = tokenData.symbol?.trim().toLowerCase();
+
+    for (const [queuedMint, queuedData] of tokenQueue.entries()) {
+      const queuedName = queuedData.tokenData?.name?.trim().toLowerCase();
+      const queuedSymbol = queuedData.tokenData?.symbol?.trim().toLowerCase();
+
+      // Skip if same name or same ticker (ignoring case and whitespace)
+      if ((tokenName && queuedName && tokenName === queuedName) ||
+          (tokenSymbol && queuedSymbol && tokenSymbol === queuedSymbol)) {
+        console.log(`   ⏭️  Skipping duplicate: ${tokenData.name || 'Unknown'} ($${tokenData.symbol || '???'}) - already queued as ${queuedMint}`);
+        return;
+      }
+    }
+
     console.log(`\n🆕 New token detected: ${tokenData.name || 'Unknown'} ($${tokenData.symbol || '???'})`);
     console.log(`   Mint: ${mint}`);
     console.log(`   ⏳ Queued for processing in ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes`);
