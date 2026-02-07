@@ -437,13 +437,17 @@ async function fetchPumpFunData(contractAddress) {
 
 // Get token data with fallback and combine sources
 async function getTokenData(contractAddress) {
-  // Try DexScreener first (best for images and socials)
-  console.log('Trying DexScreener...');
-  let dexData = await fetchDexScreenerData(contractAddress);
+  const startTime = Date.now();
 
-  // Also try gmgn.ai for full data
-  console.log('Trying gmgn.ai for holder count and fallback...');
-  let gmgnData = await fetchGmgnFullData(contractAddress);
+  // Fetch DexScreener and gmgn.ai data in parallel for better performance
+  console.log('Fetching DexScreener and gmgn.ai data in parallel...');
+  const parallelStartTime = Date.now();
+  const [dexData, gmgnData] = await Promise.all([
+    fetchDexScreenerData(contractAddress),
+    fetchGmgnFullData(contractAddress)
+  ]);
+  const parallelElapsed = Date.now() - parallelStartTime;
+  console.log(`⏱️  Parallel fetch elapsed time: ${parallelElapsed}ms`);
 
   // Check if DexScreener has socials or images
   let hasSocials = dexData?.info?.socials && dexData.info.socials.length > 0;
@@ -452,6 +456,8 @@ async function getTokenData(contractAddress) {
   // If DexScreener has data but no socials or images, use gmgn.ai as fallback
   if (dexData && (!hasSocials && !hasImage) && gmgnData) {
     console.log('📊 DexScreener has no socials/images, using gmgn.ai fallback');
+    const totalElapsed = Date.now() - startTime;
+    console.log(`⏱️  Total getTokenData elapsed time: ${totalElapsed}ms`);
     return {
       source: 'gmgn',
       data: gmgnData,
@@ -461,6 +467,8 @@ async function getTokenData(contractAddress) {
 
   // Return DexScreener data if available
   if (dexData) {
+    const totalElapsed = Date.now() - startTime;
+    console.log(`⏱️  Total getTokenData elapsed time: ${totalElapsed}ms`);
     return {
       source: 'dexscreener',
       data: dexData,
@@ -471,6 +479,8 @@ async function getTokenData(contractAddress) {
   // If DexScreener failed but gmgn.ai has data, use gmgn.ai
   if (gmgnData) {
     console.log('📊 DexScreener failed, using gmgn.ai');
+    const totalElapsed = Date.now() - startTime;
+    console.log(`⏱️  Total getTokenData elapsed time: ${totalElapsed}ms`);
     return {
       source: 'gmgn',
       data: gmgnData
@@ -479,12 +489,19 @@ async function getTokenData(contractAddress) {
 
   // Fallback: try scraping Solscan
   console.log('Trying Solscan scraping...');
+  const solscanStartTime = Date.now();
   let scrapedData = await scrapeSolscanData(contractAddress);
+  const solscanElapsed = Date.now() - solscanStartTime;
+  console.log(`⏱️  Solscan elapsed time: ${solscanElapsed}ms`);
 
   if (scrapedData) {
+    const totalElapsed = Date.now() - startTime;
+    console.log(`⏱️  Total getTokenData elapsed time: ${totalElapsed}ms`);
     return { source: 'solscan-scraped', data: scrapedData };
   }
 
+  const totalElapsed = Date.now() - startTime;
+  console.log(`⏱️  Total getTokenData elapsed time: ${totalElapsed}ms (no data found)`);
   return null;
 }
 
