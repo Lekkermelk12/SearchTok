@@ -25,6 +25,7 @@ const POSTED_TOKENS_FILE = path.join(__dirname, 'posted_tokens.json');
 const SCANNER_CONFIG = {
   MIN_MARKET_CAP: 12000,      // $12K minimum (Solscan filters this in Stage 1)
   MAX_MARKET_CAP: 250000,     // $250K maximum (Solscan filters this in Stage 1)
+  MIN_VOLUME_24H: 0,          // Minimum 24h volume (0 = no minimum)
   MIN_AGE_HOURS: 0,           // Minimum age (0 = no minimum, Solscan filters 1 day max)
   MAX_AGE_DAYS: 1,            // Max 1 day old (hardcoded in Stage 1 Solscan filter)
   SCAN_INTERVAL: 30 * 60 * 1000, // Polling: Check existing tokens every 30 minutes
@@ -1404,7 +1405,8 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
         `• Min 24h Volume: $${SCANNER_CONFIG.MIN_VOLUME_24H.toLocaleString()}\n` +
         `• Age Range: ${SCANNER_CONFIG.MIN_AGE_HOURS}h - ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
         `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
-        `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n\n` +
+        `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n` +
+        `• Token Maturity Delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes\n\n` +
         `🔍 Scanning for pump.fun tokens with TikTok links...\n\n` +
         `Use \`/autoscan stop\` to turn off.`,
         { parse_mode: 'Markdown' }
@@ -1428,7 +1430,8 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
       `• Min 24h Volume: $${SCANNER_CONFIG.MIN_VOLUME_24H.toLocaleString()}\n` +
       `• Age Range: ${SCANNER_CONFIG.MIN_AGE_HOURS}h - ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
       `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
-      `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n\n` +
+      `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n` +
+      `• Token Maturity Delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes\n\n` +
       `Commands: \`/autoscan start\` | \`/autoscan stop\` | \`/autoscan config\``,
       { parse_mode: 'Markdown' }
     );
@@ -1443,17 +1446,20 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
         `• Min Age: ${SCANNER_CONFIG.MIN_AGE_HOURS}h\n` +
         `• Max Age: ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
         `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
-        `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n\n` +
+        `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n` +
+        `• Token Maturity Delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes\n\n` +
         `*Usage:*\n` +
         `\`/autoscan config mc <amount>\` - Set min MC (e.g., 50000 for $50K)\n` +
         `\`/autoscan config volume <amount>\` - Set min volume (e.g., 10000)\n` +
         `\`/autoscan config minage <hours>\` - Set min age in hours (e.g., 1)\n` +
         `\`/autoscan config maxage <days>\` - Set max age in days (e.g., 7)\n` +
         `\`/autoscan config tiktok <yes/no>\` - Require TikTok link\n` +
-        `\`/autoscan config interval <minutes>\` - Scan interval (e.g., 5)\n\n` +
+        `\`/autoscan config interval <minutes>\` - Scan interval (e.g., 5)\n` +
+        `\`/autoscan config maturity <minutes>\` - Token maturity delay (e.g., 10)\n\n` +
         `*Examples:*\n` +
         `\`/autoscan config mc 100000\` - Set min MC to $100K\n` +
         `\`/autoscan config volume 20000\` - Set min volume to $20K\n` +
+        `\`/autoscan config maturity 10\` - Wait 10 min for tokens to mature\n` +
         `\`/autoscan config tiktok no\` - Don't require TikTok`,
         { parse_mode: 'Markdown' }
       );
@@ -1517,10 +1523,21 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
           `⚠️ Restart the scanner (\`/autoscan stop\` then \`/autoscan start\`) for this to take effect.`,
           { parse_mode: 'Markdown' }
         );
+      } else if (setting === 'maturity' || setting === 'delay') {
+        const minutes = parseInt(value);
+        if (isNaN(minutes) || minutes < 1) {
+          bot.sendMessage(chatId, '❌ Invalid minutes! Use a positive number (e.g., 15)');
+          return;
+        }
+        SCANNER_CONFIG.TOKEN_MATURITY_DELAY = minutes * 60 * 1000;
+        bot.sendMessage(chatId,
+          `✅ Token maturity delay set to ${minutes} minute${minutes !== 1 ? 's' : ''}\n\n` +
+          `New tokens will wait ${minutes} minute${minutes !== 1 ? 's' : ''} before being processed.`
+        );
       } else {
         bot.sendMessage(chatId,
           `❌ Unknown setting: ${setting}\n\n` +
-          `Valid settings: mc, volume, minage, maxage, tiktok, interval\n` +
+          `Valid settings: mc, volume, minage, maxage, tiktok, interval, maturity\n` +
           `Use \`/autoscan config\` for help.`,
           { parse_mode: 'Markdown' }
         );
