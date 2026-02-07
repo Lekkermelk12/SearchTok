@@ -943,18 +943,15 @@ async function queueTokenForProcessing(tokenData) {
       return;
     }
 
-    // Skip if a token with the same name or ticker is already queued (anti-spam)
+    // Skip if a token with the same name is already queued (anti-spam)
     const tokenName = tokenData.name?.trim().toLowerCase();
-    const tokenSymbol = tokenData.symbol?.trim().toLowerCase();
 
     for (const [queuedMint, queuedData] of tokenQueue.entries()) {
       const queuedName = queuedData.tokenData?.name?.trim().toLowerCase();
-      const queuedSymbol = queuedData.tokenData?.symbol?.trim().toLowerCase();
 
-      // Skip if same name or same ticker (ignoring case and whitespace)
-      if ((tokenName && queuedName && tokenName === queuedName) ||
-          (tokenSymbol && queuedSymbol && tokenSymbol === queuedSymbol)) {
-        console.log(`   ⏭️  Skipping duplicate: ${tokenData.name || 'Unknown'} ($${tokenData.symbol || '???'}) - already queued as ${queuedMint}`);
+      // Skip if same name (ignoring case and whitespace)
+      if (tokenName && queuedName && tokenName === queuedName) {
+        console.log(`   ⏭️  Skipping duplicate name: ${tokenData.name || 'Unknown'} ($${tokenData.symbol || '???'}) - already queued as ${queuedMint}`);
         return;
       }
     }
@@ -1027,6 +1024,46 @@ async function processQueuedToken(mint, initialTokenData) {
       }
 
       console.log('   ✅ TikTok link found!');
+    }
+
+    // Check if a token with the same ticker but higher MC is in queue or already posted
+    const tokenSymbol = initialTokenData.symbol?.trim().toLowerCase();
+    if (tokenSymbol) {
+      // Check queue for same ticker with higher MC
+      for (const [queuedMint, queuedData] of tokenQueue.entries()) {
+        if (queuedMint === mint) continue; // Skip self
+
+        const queuedSymbol = queuedData.tokenData?.symbol?.trim().toLowerCase();
+        if (queuedSymbol === tokenSymbol) {
+          console.log(`   ⚠️  Another token with ticker $${initialTokenData.symbol} is also queued (${queuedMint})`);
+          console.log('   ⏳ Will only post the highest MC version when all have matured');
+
+          // Fetch MC of the other queued token
+          const otherDexData = await fetchDexScreenerData(queuedMint);
+          const otherMarketCap = otherDexData?.market_cap || otherDexData?.usd_market_cap || 0;
+
+          if (otherMarketCap > marketCap) {
+            console.log(`   ⏭️  Skipped: Other ${initialTokenData.symbol} token has higher MC ($${otherMarketCap.toLocaleString()} > $${marketCap.toLocaleString()})`);
+            return;
+          }
+        }
+      }
+
+      // Check if a token with same ticker was already posted with higher MC
+      const trackedTokens = await loadTrackedTokens();
+      for (const trackedToken of trackedTokens) {
+        const postedSymbol = trackedToken.symbol?.trim().toLowerCase();
+
+        if (postedSymbol === tokenSymbol) {
+          const postedMC = trackedToken.marketCap || 0;
+          if (postedMC > marketCap) {
+            console.log(`   ⏭️  Skipped: ${initialTokenData.symbol} already posted with higher MC ($${postedMC.toLocaleString()} > $${marketCap.toLocaleString()})`);
+            return;
+          } else {
+            console.log(`   ✅ This ${initialTokenData.symbol} has higher MC ($${marketCap.toLocaleString()}) than previously posted version ($${postedMC.toLocaleString()})`);
+          }
+        }
+      }
     }
 
     // Token qualifies! Auto-post it
