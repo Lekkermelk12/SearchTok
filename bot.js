@@ -14,7 +14,7 @@ if (!token) {
   process.exit(1);
 }
 
-console.log('✅ Bot initialized - using PumpPortal WebSocket for real-time pump.fun token discovery');
+console.log('✅ Bot initialized - Hybrid scanner: WebSocket (new tokens) + Polling (existing tokens)');
 
 const bot = new TelegramBot(token, { polling: true });
 const DATA_FILE = path.join(__dirname, 'memecoins.json');
@@ -27,10 +27,10 @@ const SCANNER_CONFIG = {
   MAX_MARKET_CAP: 250000,     // $250K maximum (Solscan filters this in Stage 1)
   MIN_AGE_HOURS: 0,           // Minimum age (0 = no minimum, Solscan filters 1 day max)
   MAX_AGE_DAYS: 1,            // Max 1 day old (hardcoded in Stage 1 Solscan filter)
-  SCAN_INTERVAL: 5 * 60 * 1000, // Check every 5 minutes (conservative to save API calls)
+  SCAN_INTERVAL: 30 * 60 * 1000, // Polling: Check existing tokens every 30 minutes
   REQUIRE_TIKTOK: true,       // Must have TikTok link (GMGN.ai checks in Stage 2)
-  TOKENS_PER_SCAN: 100,       // Fetch 100 tokens from Solscan per scan
-  TOKEN_MATURITY_DELAY: 15 * 60 * 1000 // Wait 15 minutes for token to mature (get MC/volume)
+  TOKENS_PER_SCAN: 100,       // Fetch 100 tokens from DexScreener per scan
+  TOKEN_MATURITY_DELAY: 15 * 60 * 1000 // WebSocket: Wait 15 min for new tokens to mature
 };
 
 // Real-time market data cache
@@ -1223,21 +1223,33 @@ async function autoPostToken(contractAddress) {
   }
 }
 
-// Start auto-scanner (WebSocket-based)
+// Start auto-scanner (Hybrid: WebSocket + Polling)
 function startAutoScanner() {
   if (scannerRunning) {
     return false;
   }
 
-  console.log('🚀 Starting auto-scanner (PumpPortal WebSocket)...');
+  console.log('🚀 Starting auto-scanner (Hybrid Mode: WebSocket + Polling)...');
   console.log(`📊 Settings: MC $${SCANNER_CONFIG.MIN_MARKET_CAP.toLocaleString()}-$${SCANNER_CONFIG.MAX_MARKET_CAP.toLocaleString()}, Age ${SCANNER_CONFIG.MIN_AGE_HOURS}h-${SCANNER_CONFIG.MAX_AGE_DAYS}d, TikTok: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Required' : 'Optional'}`);
-  console.log(`⏱️  Token maturity delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes`);
+  console.log('');
+  console.log('📡 WebSocket: Real-time new token detection');
+  console.log(`   ⏱️  Maturity delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes`);
+  console.log('');
+  console.log('🔄 Polling: Existing token discovery');
+  console.log(`   ⏱️  Scan interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes`);
   console.log('');
 
   scannerRunning = true;
 
-  // Connect to WebSocket for real-time token events
+  // 1. Connect to WebSocket for real-time NEW token events
   connectWebSocket();
+
+  // 2. Run first polling scan immediately to catch EXISTING tokens
+  console.log('🔍 Running initial scan for existing tokens...');
+  runScanCycle();
+
+  // 3. Then poll every SCAN_INTERVAL to catch tokens that have matured
+  scannerInterval = setInterval(runScanCycle, SCANNER_CONFIG.SCAN_INTERVAL);
 
   return true;
 }
