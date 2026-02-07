@@ -1403,7 +1403,7 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
         `📊 *Settings:*\n` +
         `• Min Market Cap: $${SCANNER_CONFIG.MIN_MARKET_CAP.toLocaleString()}\n` +
         `• Min 24h Volume: $${SCANNER_CONFIG.MIN_VOLUME_24H.toLocaleString()}\n` +
-        `• Age Range: ${SCANNER_CONFIG.MIN_AGE_HOURS}h - ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
+        `• Age Range: ${SCANNER_CONFIG.MIN_AGE_HOURS}h - ${SCANNER_CONFIG.MAX_AGE_DAYS * 24}h\n` +
         `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
         `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n` +
         `• Token Maturity Delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes\n\n` +
@@ -1428,7 +1428,7 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
       `*Settings:*\n` +
       `• Min Market Cap: $${SCANNER_CONFIG.MIN_MARKET_CAP.toLocaleString()}\n` +
       `• Min 24h Volume: $${SCANNER_CONFIG.MIN_VOLUME_24H.toLocaleString()}\n` +
-      `• Age Range: ${SCANNER_CONFIG.MIN_AGE_HOURS}h - ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
+      `• Age Range: ${SCANNER_CONFIG.MIN_AGE_HOURS}h - ${SCANNER_CONFIG.MAX_AGE_DAYS * 24}h\n` +
       `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
       `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n` +
       `• Token Maturity Delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes\n\n` +
@@ -1444,7 +1444,7 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
         `• Min Market Cap: $${SCANNER_CONFIG.MIN_MARKET_CAP.toLocaleString()}\n` +
         `• Min 24h Volume: $${SCANNER_CONFIG.MIN_VOLUME_24H.toLocaleString()}\n` +
         `• Min Age: ${SCANNER_CONFIG.MIN_AGE_HOURS}h\n` +
-        `• Max Age: ${SCANNER_CONFIG.MAX_AGE_DAYS}d\n` +
+        `• Max Age: ${SCANNER_CONFIG.MAX_AGE_DAYS * 24}h\n` +
         `• TikTok Required: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Yes' : 'No'}\n` +
         `• Scan Interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes\n` +
         `• Token Maturity Delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes\n\n` +
@@ -1452,13 +1452,14 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
         `\`/autoscan config mc <amount>\` - Set min MC (e.g., 50000 for $50K)\n` +
         `\`/autoscan config volume <amount>\` - Set min volume (e.g., 10000)\n` +
         `\`/autoscan config minage <hours>\` - Set min age in hours (e.g., 1)\n` +
-        `\`/autoscan config maxage <days>\` - Set max age in days (e.g., 7)\n` +
+        `\`/autoscan config maxage <hours>\` - Set max age in hours (e.g., 24)\n` +
         `\`/autoscan config tiktok <yes/no>\` - Require TikTok link\n` +
         `\`/autoscan config interval <minutes>\` - Scan interval (e.g., 5)\n` +
         `\`/autoscan config maturity <minutes>\` - Token maturity delay (e.g., 10)\n\n` +
         `*Examples:*\n` +
         `\`/autoscan config mc 100000\` - Set min MC to $100K\n` +
         `\`/autoscan config volume 20000\` - Set min volume to $20K\n` +
+        `\`/autoscan config maxage 12\` - Only scan tokens up to 12 hours old\n` +
         `\`/autoscan config maturity 10\` - Wait 10 min for tokens to mature\n` +
         `\`/autoscan config tiktok no\` - Don't require TikTok`,
         { parse_mode: 'Markdown' }
@@ -1500,13 +1501,18 @@ bot.onText(/\/autoscan (.+)/, (msg, match) => {
           : `${hours} hour${hours !== 1 ? 's' : ''}`;
         bot.sendMessage(chatId, `✅ Min Age set to ${displayText}`);
       } else if (setting === 'maxage') {
-        const days = parseInt(value);
-        if (isNaN(days) || days < 0) {
-          bot.sendMessage(chatId, '❌ Invalid days! Use a positive number (e.g., 7)');
+        const hours = parseFloat(value);
+        if (isNaN(hours) || hours < 0) {
+          bot.sendMessage(chatId, '❌ Invalid hours! Use a positive number (e.g., 24 for 1 day)');
           return;
         }
-        SCANNER_CONFIG.MAX_AGE_DAYS = days;
-        bot.sendMessage(chatId, `✅ Max Age set to ${days} day${days !== 1 ? 's' : ''}`);
+        SCANNER_CONFIG.MAX_AGE_DAYS = hours / 24; // Convert hours to days for storage
+
+        // Format hours nicely (show as days if >= 24 hours)
+        const displayText = hours >= 24
+          ? `${(hours / 24).toFixed(1)} day${hours !== 24 ? 's' : ''}`
+          : `${hours} hour${hours !== 1 ? 's' : ''}`;
+        bot.sendMessage(chatId, `✅ Max Age set to ${displayText}`);
       } else if (setting === 'tiktok') {
         const enabled = value.toLowerCase() === 'yes' || value.toLowerCase() === 'true' || value === '1';
         SCANNER_CONFIG.REQUIRE_TIKTOK = enabled;
