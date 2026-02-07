@@ -648,45 +648,9 @@ function formatTokenData(result, contractAddress) {
     }
   }
 
-  let message = `🪙 *${name}* ($${symbol})\n\n`;
-
-  if (price) {
-    message += `💰 *Price:* $${parseFloat(price).toFixed(8)}\n`;
-  }
-
-  if (marketCap) {
-    const mcFormatted = marketCap >= 1000000
-      ? `$${(marketCap / 1000000).toFixed(2)}M`
-      : marketCap >= 1000
-      ? `$${(marketCap / 1000).toFixed(2)}K`
-      : `$${marketCap.toFixed(2)}`;
-    message += `📊 *Market Cap:* ${mcFormatted}\n`;
-  }
-
-  if (holders) {
-    message += `👥 *Holders:* ${holders.toLocaleString()}\n`;
-  }
-
-  if (age) {
-    message += `⏰ *Age:* ${age}\n`;
-  }
-
-  message += `\n📝 *CA:* \`${contractAddress}\`\n`;
-
-  // Add text socials if they exist (keeping for backwards compatibility)
-  const socialLinks = [];
-  if (socials?.website) socialLinks.push(`[Website](${socials.website})`);
-  if (socials?.twitter) socialLinks.push(`[Twitter](${socials.twitter})`);
-  if (socials?.telegram) socialLinks.push(`[Telegram](${socials.telegram})`);
-
-  if (socialLinks.length > 0) {
-    message += `\n🔗 ${socialLinks.join(' • ')}\n`;
-  }
-
-  message += `\n📊 [Solscan](https://solscan.io/token/${contractAddress}) • [DexScreener](https://dexscreener.com/solana/${contractAddress})`;
-
-  // Add Bloom referral link
-  message += `\n\n🌸 [Trade on Bloom](https://t.me/BloomSolana_bot?start=ref_cardboardg_${contractAddress})`;
+  // New simple format
+  let message = `${name} just got listed on NicheScout lol\n\n`;
+  message += `${symbol} ${contractAddress}`;
 
   // If no TikTok link, create a search link
   if (!socials?.tiktok && name !== 'Unknown') {
@@ -699,32 +663,11 @@ function formatTokenData(result, contractAddress) {
 
 // Format token data for Twitter/X posting (280 character limit)
 function formatTweet(formatted, contractAddress) {
-  const { name, symbol, marketCap, price, socials } = formatted;
+  const { name, symbol } = formatted;
 
-  // Format market cap
-  const mcFormatted = marketCap >= 1000000
-    ? `$${(marketCap / 1000000).toFixed(2)}M`
-    : marketCap >= 1000
-    ? `$${(marketCap / 1000).toFixed(1)}K`
-    : `$${Math.round(marketCap)}`;
-
-  // Build tweet with essential info
-  let tweet = `🪙 ${name} ($${symbol})\n\n`;
-  tweet += `💰 MC: ${mcFormatted}\n`;
-
-  if (price) {
-    tweet += `📊 Price: $${parseFloat(price).toFixed(8)}\n`;
-  }
-
-  tweet += `\nCA: ${contractAddress}\n`;
-
-  // Add links
-  tweet += `\n🔗 https://dexscreener.com/solana/${contractAddress}`;
-
-  // Add TikTok link if available
-  if (socials?.tiktok && !socials.tiktok.includes('tiktok.com/search')) {
-    tweet += `\n🎵 ${socials.tiktok}`;
-  }
+  // New simple format matching Telegram
+  let tweet = `${name} just got listed on NicheScout lol\n\n`;
+  tweet += `${symbol} ${contractAddress}`;
 
   return tweet;
 }
