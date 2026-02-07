@@ -5,7 +5,7 @@ const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const WebSocket = require('ws');
-const { TwitterApi } = require('twitter-api-v2');
+// const { TwitterApi } = require('twitter-api-v2'); // ARCHIVED - Twitter posting disabled
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const channelId = process.env.CHANNEL_ID || '-1003864629972';
@@ -15,7 +15,9 @@ if (!token) {
   process.exit(1);
 }
 
-// Initialize Twitter client
+// ARCHIVED - Twitter/X posting (disabled due to network issues)
+// Uncomment to re-enable when network/DNS is configured
+/*
 let twitterClient = null;
 const TWITTER_ENABLED = process.env.TWITTER_API_KEY &&
                         process.env.TWITTER_API_SECRET &&
@@ -37,6 +39,7 @@ if (TWITTER_ENABLED) {
 } else {
   console.log('⚠️  Twitter API credentials not configured - Twitter posting disabled');
 }
+*/
 
 console.log('✅ Bot initialized - Hybrid scanner: WebSocket (new tokens) + Polling (existing tokens)');
 
@@ -661,7 +664,8 @@ function formatTokenData(result, contractAddress) {
   return { message, imageUrl, socials, name, symbol, marketCap, price, holders };
 }
 
-// Format token data for Twitter/X posting (280 character limit)
+// ARCHIVED - Twitter/X posting (disabled)
+/*
 function formatTweet(formatted, contractAddress) {
   const { name, symbol } = formatted;
 
@@ -672,6 +676,7 @@ function formatTweet(formatted, contractAddress) {
 
   return tweet;
 }
+*/
 
 // ============= AUTO-SCANNER FUNCTIONS =============
 
@@ -1254,7 +1259,8 @@ async function autoPostToken(contractAddress) {
       await bot.sendMessage(channelId, formatted.message, messageOptions);
     }
 
-    // Post to Twitter/X if enabled
+    // ARCHIVED - Twitter/X posting (disabled)
+    /*
     if (twitterClient && TWITTER_ENABLED) {
       try {
         console.log('  🐦 Posting to Twitter...');
@@ -1297,6 +1303,7 @@ async function autoPostToken(contractAddress) {
         // Continue even if Twitter post fails
       }
     }
+    */
 
     // Add to tracked tokens
     await addToTrackedTokens(contractAddress, {
