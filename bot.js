@@ -13,7 +13,7 @@ if (!token) {
   process.exit(1);
 }
 
-console.log('✅ Bot initialized - using DexScreener API (no API key needed!)');
+console.log('✅ Bot initialized - using DexScreener for pump.fun token discovery');
 
 const bot = new TelegramBot(token, { polling: true });
 const DATA_FILE = path.join(__dirname, 'memecoins.json');
@@ -711,17 +711,21 @@ async function checkGMGNForTikTok(contractAddress) {
   }
 }
 
-// STAGE 1: Fetch tokens from DexScreener API (primary filter - FREE, no API key!)
+// STAGE 1: Fetch tokens using DexScreener (real-time market data)
 async function fetchPumpFunTokens() {
   try {
     console.log(`   📡 STAGE 1: Fetching pump.fun tokens from DexScreener...`);
 
-    // DexScreener search for pump.fun tokens
-    const response = await axios.get('https://api.dexscreener.com/latest/dex/search/?q=pump.fun', {
+    // Use DexScreener to search for pump.fun tokens directly
+    // This gives us both token data AND market cap in one call
+    const response = await axios.get('https://api.dexscreener.com/latest/dex/search', {
+      params: {
+        q: 'pump.fun'
+      },
       timeout: 15000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       }
     });
 
@@ -733,17 +737,24 @@ async function fetchPumpFunTokens() {
     const allPairs = response.data.pairs || [];
     console.log(`   ✅ Fetched ${allPairs.length} pairs from DexScreener`);
 
-    // Filter for pump.fun tokens only
+    // Filter for actual pump.fun tokens
     const pumpFunPairs = allPairs.filter(pair => {
       const dexId = (pair.dexId || '').toLowerCase();
       const url = (pair.url || '').toLowerCase();
-      return dexId.includes('pump') || url.includes('pump.fun');
+      const chainId = (pair.chainId || '').toLowerCase();
+
+      // Must be on Solana and related to pump.fun
+      return chainId === 'solana' && (
+        dexId.includes('pump') ||
+        url.includes('pump.fun') ||
+        dexId === 'raydium' // pump.fun tokens that graduated to Raydium
+      );
     });
 
-    console.log(`   ✅ Found ${pumpFunPairs.length} pump.fun pairs`);
+    console.log(`   ✅ Found ${pumpFunPairs.length} pump.fun-related pairs`);
 
-    // DEBUG: Show first 3 pairs to understand data format
-    console.log(`\n🔍 DEBUG: Showing first 3 pairs to check data format:`);
+    // DEBUG: Show first 3 pairs
+    console.log(`\n🔍 DEBUG: Showing first 3 pairs:`);
     for (let i = 0; i < Math.min(3, pumpFunPairs.length); i++) {
       const pair = pumpFunPairs[i];
       const createdTime = pair.pairCreatedAt || 0;
@@ -752,28 +763,30 @@ async function fetchPumpFunTokens() {
       console.log(`   [${i + 1}] ${pair.baseToken?.symbol || '???'}`);
       console.log(`       MC: $${marketCap.toLocaleString()}`);
       console.log(`       Age: ${ageHours > 24 ? (ageHours / 24).toFixed(1) + ' days' : ageHours.toFixed(1) + ' hours'}`);
-      console.log(`       Created: ${createdTime ? new Date(createdTime).toISOString() : 'N/A'}`);
+      console.log(`       DEX: ${pair.dexId}`);
     }
     console.log('');
 
-    // Filter by age and MC (Stage 1 filtering)
+    // Filter by age and MC
     const now = Date.now();
-    const oneDayAgo = now - (24 * 60 * 60 * 1000);
+    const oneDayAgo = now - (SCANNER_CONFIG.MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
 
     const filtered = pumpFunPairs.filter(pair => {
       const createdTime = pair.pairCreatedAt || 0;
       const marketCap = pair.fdv || pair.marketCap || 0;
 
-      // Age: 1 day old max
-      if (createdTime < oneDayAgo) return false;
+      // Age filter
+      if (createdTime && createdTime < oneDayAgo) return false;
 
-      // MC: $12K - $250K
-      if (marketCap < 12000 || marketCap > 250000) return false;
+      // MC filter
+      if (marketCap < SCANNER_CONFIG.MIN_MARKET_CAP || marketCap > SCANNER_CONFIG.MAX_MARKET_CAP) {
+        return false;
+      }
 
       return true;
     });
 
-    console.log(`   ✅ Filtered to ${filtered.length} tokens (1 day old, $12K-$250K MC)`);
+    console.log(`   ✅ Filtered to ${filtered.length} tokens (${SCANNER_CONFIG.MAX_AGE_DAYS} day old, $${SCANNER_CONFIG.MIN_MARKET_CAP.toLocaleString()}-$${SCANNER_CONFIG.MAX_MARKET_CAP.toLocaleString()} MC)`);
 
     // Convert to standard format
     const convertedTokens = filtered.map(pair => ({
