@@ -5,6 +5,7 @@ const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const WebSocket = require('ws');
+const { TwitterApi } = require('twitter-api-v2');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const channelId = process.env.CHANNEL_ID || '-1003864629972';
@@ -12,6 +13,29 @@ const channelId = process.env.CHANNEL_ID || '-1003864629972';
 if (!token) {
   console.error('Error: TELEGRAM_BOT_TOKEN is not set in .env file');
   process.exit(1);
+}
+
+// Initialize Twitter client
+let twitterClient = null;
+const TWITTER_ENABLED = process.env.TWITTER_API_KEY &&
+                        process.env.TWITTER_API_SECRET &&
+                        process.env.TWITTER_ACCESS_TOKEN &&
+                        process.env.TWITTER_ACCESS_SECRET;
+
+if (TWITTER_ENABLED) {
+  try {
+    twitterClient = new TwitterApi({
+      appKey: process.env.TWITTER_API_KEY,
+      appSecret: process.env.TWITTER_API_SECRET,
+      accessToken: process.env.TWITTER_ACCESS_TOKEN,
+      accessSecret: process.env.TWITTER_ACCESS_SECRET,
+    });
+    console.log('✅ Twitter client initialized');
+  } catch (error) {
+    console.log('⚠️  Twitter client initialization failed:', error.message);
+  }
+} else {
+  console.log('⚠️  Twitter API credentials not configured - Twitter posting disabled');
 }
 
 console.log('✅ Bot initialized - Hybrid scanner: WebSocket (new tokens) + Polling (existing tokens)');
@@ -673,6 +697,38 @@ function formatTokenData(result, contractAddress) {
   return { message, imageUrl, socials, name, symbol, marketCap, price, holders };
 }
 
+// Format token data for Twitter/X posting (280 character limit)
+function formatTweet(formatted, contractAddress) {
+  const { name, symbol, marketCap, price, socials } = formatted;
+
+  // Format market cap
+  const mcFormatted = marketCap >= 1000000
+    ? `$${(marketCap / 1000000).toFixed(2)}M`
+    : marketCap >= 1000
+    ? `$${(marketCap / 1000).toFixed(1)}K`
+    : `$${Math.round(marketCap)}`;
+
+  // Build tweet with essential info
+  let tweet = `🪙 ${name} ($${symbol})\n\n`;
+  tweet += `💰 MC: ${mcFormatted}\n`;
+
+  if (price) {
+    tweet += `📊 Price: $${parseFloat(price).toFixed(8)}\n`;
+  }
+
+  tweet += `\nCA: ${contractAddress}\n`;
+
+  // Add links
+  tweet += `\n🔗 https://dexscreener.com/solana/${contractAddress}`;
+
+  // Add TikTok link if available
+  if (socials?.tiktok && !socials.tiktok.includes('tiktok.com/search')) {
+    tweet += `\n🎵 ${socials.tiktok}`;
+  }
+
+  return tweet;
+}
+
 // ============= AUTO-SCANNER FUNCTIONS =============
 
 // Check GMGN.ai for TikTok links (Stage 2)
@@ -1252,6 +1308,50 @@ async function autoPostToken(contractAddress) {
     } else {
       messageOptions.disable_web_page_preview = false;
       await bot.sendMessage(channelId, formatted.message, messageOptions);
+    }
+
+    // Post to Twitter/X if enabled
+    if (twitterClient && TWITTER_ENABLED) {
+      try {
+        console.log('  🐦 Posting to Twitter...');
+        const tweet = formatTweet(formatted, contractAddress);
+
+        // Post tweet with image if available
+        if (formatted.imageUrl) {
+          try {
+            // Download image
+            const imageResponse = await axios.get(formatted.imageUrl, {
+              responseType: 'arraybuffer',
+              timeout: 10000
+            });
+
+            // Upload image to Twitter
+            const mediaId = await twitterClient.v1.uploadMedia(Buffer.from(imageResponse.data), {
+              mimeType: 'image/jpeg'
+            });
+
+            // Post tweet with image
+            await twitterClient.v2.tweet({
+              text: tweet,
+              media: { media_ids: [mediaId] }
+            });
+
+            console.log('  ✅ Posted to Twitter with image');
+          } catch (imageError) {
+            // If image upload fails, post without image
+            console.log('  ⚠️  Failed to upload image to Twitter, posting without image');
+            await twitterClient.v2.tweet(tweet);
+            console.log('  ✅ Posted to Twitter (text only)');
+          }
+        } else {
+          // Post tweet without image
+          await twitterClient.v2.tweet(tweet);
+          console.log('  ✅ Posted to Twitter');
+        }
+      } catch (twitterError) {
+        console.log(`  ⚠️  Failed to post to Twitter: ${twitterError.message}`);
+        // Continue even if Twitter post fails
+      }
     }
 
     // Add to tracked tokens

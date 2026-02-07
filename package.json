@@ -23,6 +23,7 @@
     "cheerio": "^1.2.0",
     "dotenv": "^16.4.5",
     "node-telegram-bot-api": "^0.66.0",
+    "twitter-api-v2": "^1.29.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {
