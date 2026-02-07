@@ -4,6 +4,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const WebSocket = require('ws');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const channelId = process.env.CHANNEL_ID || '-1003864629972';
@@ -13,7 +14,7 @@ if (!token) {
   process.exit(1);
 }
 
-console.log('✅ Bot initialized - using DexScreener for pump.fun token discovery');
+console.log('✅ Bot initialized - using PumpPortal WebSocket for real-time pump.fun token discovery');
 
 const bot = new TelegramBot(token, { polling: true });
 const DATA_FILE = path.join(__dirname, 'memecoins.json');
@@ -28,7 +29,8 @@ const SCANNER_CONFIG = {
   MAX_AGE_DAYS: 1,            // Max 1 day old (hardcoded in Stage 1 Solscan filter)
   SCAN_INTERVAL: 5 * 60 * 1000, // Check every 5 minutes (conservative to save API calls)
   REQUIRE_TIKTOK: true,       // Must have TikTok link (GMGN.ai checks in Stage 2)
-  TOKENS_PER_SCAN: 100        // Fetch 100 tokens from Solscan per scan
+  TOKENS_PER_SCAN: 100,       // Fetch 100 tokens from Solscan per scan
+  TOKEN_MATURITY_DELAY: 15 * 60 * 1000 // Wait 15 minutes for token to mature (get MC/volume)
 };
 
 // Real-time market data cache
@@ -130,6 +132,11 @@ async function updateLiveMarketData() {
 // Auto-scanner state
 let scannerInterval = null;
 let scannerRunning = false;
+
+// WebSocket state
+let ws = null;
+let wsReconnectTimeout = null;
+let tokenQueue = new Map(); // Track tokens waiting to mature: mint -> { timestamp, timeoutId }
 
 // Load memecoins data from file
 async function loadMemecoins() {
@@ -841,6 +848,185 @@ async function fetchPumpFunTokens() {
   }
 }
 
+// ============= WEBSOCKET FUNCTIONS (PumpPortal Real-Time) =============
+
+// Connect to PumpPortal WebSocket for real-time token events
+function connectWebSocket() {
+  console.log('🔌 Connecting to PumpPortal WebSocket...');
+
+  ws = new WebSocket('wss://pumpportal.fun/api/data');
+
+  ws.on('open', () => {
+    console.log('✅ Connected to PumpPortal WebSocket');
+
+    // Subscribe to new token creation events
+    const subscribeMessage = {
+      method: 'subscribeNewToken'
+    };
+    ws.send(JSON.stringify(subscribeMessage));
+    console.log('📡 Subscribed to new token creation events');
+    console.log(`⏱️  Token maturity delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes`);
+  });
+
+  ws.on('message', async (data) => {
+    try {
+      const message = JSON.parse(data.toString());
+
+      // Handle new token creation event
+      if (message && message.mint) {
+        await queueTokenForProcessing(message);
+      }
+    } catch (error) {
+      console.log('Error parsing WebSocket message:', error.message);
+    }
+  });
+
+  ws.on('error', (error) => {
+    console.log('❌ WebSocket error:', error.message);
+  });
+
+  ws.on('close', () => {
+    console.log('🔌 WebSocket disconnected');
+
+    // Auto-reconnect if scanner is still running
+    if (scannerRunning) {
+      console.log('🔄 Reconnecting in 5 seconds...');
+      wsReconnectTimeout = setTimeout(() => {
+        connectWebSocket();
+      }, 5000);
+    }
+  });
+}
+
+// Disconnect WebSocket
+function disconnectWebSocket() {
+  console.log('🔌 Disconnecting WebSocket...');
+
+  if (wsReconnectTimeout) {
+    clearTimeout(wsReconnectTimeout);
+    wsReconnectTimeout = null;
+  }
+
+  // Clear all pending token timeouts
+  for (const [mint, queuedToken] of tokenQueue.entries()) {
+    if (queuedToken.timeoutId) {
+      clearTimeout(queuedToken.timeoutId);
+    }
+  }
+  tokenQueue.clear();
+
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+
+  console.log('✅ WebSocket disconnected and queue cleared');
+}
+
+// Queue a new token for processing after maturity delay
+async function queueTokenForProcessing(tokenData) {
+  try {
+    const mint = tokenData.mint;
+
+    if (!mint) {
+      return;
+    }
+
+    // Skip if already posted
+    if (await isTokenPosted(mint)) {
+      return;
+    }
+
+    // Skip if already queued
+    if (tokenQueue.has(mint)) {
+      return;
+    }
+
+    console.log(`\n🆕 New token detected: ${tokenData.name || 'Unknown'} ($${tokenData.symbol || '???'})`);
+    console.log(`   Mint: ${mint}`);
+    console.log(`   ⏳ Queued for processing in ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes`);
+
+    // Schedule token for processing after maturity delay
+    const timeoutId = setTimeout(async () => {
+      await processQueuedToken(mint, tokenData);
+      tokenQueue.delete(mint);
+    }, SCANNER_CONFIG.TOKEN_MATURITY_DELAY);
+
+    // Add to queue
+    tokenQueue.set(mint, {
+      timestamp: Date.now(),
+      timeoutId: timeoutId,
+      tokenData: tokenData
+    });
+
+  } catch (error) {
+    console.log(`  ❌ Error queuing token: ${error.message}`);
+  }
+}
+
+// Process a queued token after maturity delay
+async function processQueuedToken(mint, initialTokenData) {
+  try {
+    console.log(`\n🔍 Processing matured token: ${initialTokenData.name || 'Unknown'} ($${initialTokenData.symbol || '???'})`);
+    console.log(`   Mint: ${mint}`);
+
+    // Skip if already posted (check again in case it was posted manually)
+    if (await isTokenPosted(mint)) {
+      console.log('   ⏭️  Already posted, skipping');
+      return;
+    }
+
+    // Fetch fresh data from DexScreener for market cap
+    console.log('   📡 Fetching current market data from DexScreener...');
+    const dexData = await fetchDexScreenerData(mint);
+
+    if (!dexData) {
+      console.log('   ❌ Could not fetch DexScreener data');
+      return;
+    }
+
+    const marketCap = dexData.market_cap || dexData.usd_market_cap || 0;
+    console.log(`   💰 Current MC: $${marketCap.toLocaleString()}`);
+
+    // Check market cap criteria
+    if (marketCap < SCANNER_CONFIG.MIN_MARKET_CAP) {
+      console.log(`   ⏭️  Skipped: MC too low ($${marketCap.toFixed(0)} < $${SCANNER_CONFIG.MIN_MARKET_CAP})`);
+      return;
+    }
+
+    if (marketCap > SCANNER_CONFIG.MAX_MARKET_CAP) {
+      console.log(`   ⏭️  Skipped: MC too high ($${marketCap.toFixed(0)} > $${SCANNER_CONFIG.MAX_MARKET_CAP})`);
+      return;
+    }
+
+    // Check for TikTok link if required
+    if (SCANNER_CONFIG.REQUIRE_TIKTOK) {
+      console.log('   🔍 Checking GMGN.ai for TikTok link...');
+      const gmgnData = await checkGMGNForTikTok(mint);
+
+      if (!gmgnData.hasTikTok) {
+        console.log('   ⏭️  Skipped: No TikTok link found');
+        return;
+      }
+
+      console.log('   ✅ TikTok link found!');
+    }
+
+    // Token qualifies! Auto-post it
+    console.log('   ✅ Token meets all criteria, posting...');
+    const success = await autoPostToken(mint);
+
+    if (success) {
+      console.log('   ✅ Successfully auto-posted!');
+    } else {
+      console.log('   ❌ Failed to auto-post');
+    }
+
+  } catch (error) {
+    console.log(`   ❌ Error processing queued token: ${error.message}`);
+  }
+}
+
 // Check if token meets auto-post criteria (pump.fun data)
 async function meetsAutoPostCriteria(tokenData) {
   // Get market cap from pump.fun data
@@ -1037,23 +1223,21 @@ async function autoPostToken(contractAddress) {
   }
 }
 
-// Start auto-scanner (Polling-based)
+// Start auto-scanner (WebSocket-based)
 function startAutoScanner() {
   if (scannerRunning) {
     return false;
   }
 
-  console.log('🚀 Starting auto-scanner (Polling)...');
-  console.log(`📊 Settings: MC $${SCANNER_CONFIG.MIN_MARKET_CAP}+, Age ${SCANNER_CONFIG.MIN_AGE_HOURS}h-${SCANNER_CONFIG.MAX_AGE_DAYS}d, TikTok: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Required' : 'Optional'}`);
-  console.log(`⏱️  Scan interval: ${SCANNER_CONFIG.SCAN_INTERVAL / 60000} minutes`);
+  console.log('🚀 Starting auto-scanner (PumpPortal WebSocket)...');
+  console.log(`📊 Settings: MC $${SCANNER_CONFIG.MIN_MARKET_CAP.toLocaleString()}-$${SCANNER_CONFIG.MAX_MARKET_CAP.toLocaleString()}, Age ${SCANNER_CONFIG.MIN_AGE_HOURS}h-${SCANNER_CONFIG.MAX_AGE_DAYS}d, TikTok: ${SCANNER_CONFIG.REQUIRE_TIKTOK ? 'Required' : 'Optional'}`);
+  console.log(`⏱️  Token maturity delay: ${SCANNER_CONFIG.TOKEN_MATURITY_DELAY / 60000} minutes`);
+  console.log('');
 
   scannerRunning = true;
 
-  // Run first scan immediately
-  runScanCycle();
-
-  // Then run every SCAN_INTERVAL
-  scannerInterval = setInterval(runScanCycle, SCANNER_CONFIG.SCAN_INTERVAL);
+  // Connect to WebSocket for real-time token events
+  connectWebSocket();
 
   return true;
 }
@@ -1066,12 +1250,17 @@ function stopAutoScanner() {
 
   console.log('⏹️  Stopping auto-scanner...');
 
+  // Disconnect WebSocket
+  disconnectWebSocket();
+
+  // Clear polling interval if it exists (for backward compatibility)
   if (scannerInterval) {
     clearInterval(scannerInterval);
     scannerInterval = null;
   }
 
   scannerRunning = false;
+  console.log('✅ Auto-scanner stopped');
   return true;
 }
 
